@@ -16,6 +16,8 @@ This toolkit allows you to analyze LinkedIn job posting data to gain insights in
 The easiest way to analyze LinkedIn job postings is to use the provided script:
 
 ```bash
+# Download Kaggle Linkedin job postings
+python download_dataset.py
 # Run the analysis script on your data
 python linkedin_job_analysis.py
 ```
