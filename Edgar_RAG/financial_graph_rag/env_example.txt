@@ -1,0 +1,94 @@
+# Financial Graph RAG Environment Configuration
+# Copy this file to .env and fill in your actual values
+
+# =============================================================================
+# LLM Configuration
+# =============================================================================
+
+# Ollama Configuration (Local LLM - Default using OpenAI API format)
+OPENAI_API_KEY=ollama-local
+OPENAI_BASE_URL=http://localhost:11434/v1
+DEFAULT_LLM_PROVIDER=openai
+DEFAULT_LLM_MODEL=gemma3:27b
+
+# OpenAI Configuration (Cloud option)
+# OPENAI_API_KEY=your_openai_api_key_here
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# DEFAULT_LLM_PROVIDER=openai
+# DEFAULT_LLM_MODEL=gpt-4-turbo-preview
+
+# Anthropic Configuration (alternative cloud option)
+# ANTHROPIC_API_KEY=your_anthropic_api_key_here
+# DEFAULT_LLM_PROVIDER=anthropic
+# DEFAULT_LLM_MODEL=claude-3-sonnet-20240229
+
+# Embedding Model Configuration
+EMBEDDING_MODEL=text-embedding-3-large
+EMBEDDING_DIMENSION=3072
+
+# =============================================================================
+# Database Configuration
+# =============================================================================
+
+# Neo4j Configuration (Knowledge Graph)
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USERNAME=neo4j
+NEO4J_PASSWORD=password
+NEO4J_DATABASE=neo4j
+
+# ChromaDB Configuration (Vector Store)
+CHROMA_PERSIST_DIRECTORY=./chroma_db
+CHROMA_COLLECTION_NAME=financial_documents
+
+# =============================================================================
+# Data Storage Configuration
+# =============================================================================
+
+# Data Directories
+DATA_DIRECTORY=./data
+EDGAR_DATA_DIRECTORY=./data/edgar
+CACHE_DIRECTORY=./cache
+
+# =============================================================================
+# EDGAR Configuration
+# =============================================================================
+
+# SEC EDGAR Settings (required for respectful scraping)
+EDGAR_USER_AGENT=Financial Graph RAG Research Tool
+EDGAR_EMAIL=your_email@example.com
+
+# =============================================================================
+# Processing Configuration
+# =============================================================================
+
+# Parallel Processing
+MAX_WORKERS=4
+
+# Text Processing
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+
+# Rate Limiting (seconds between requests)
+EDGAR_RATE_LIMIT=0.1
+LLM_RATE_LIMIT=1.0
+
+# =============================================================================
+# M&A Analysis Configuration
+# =============================================================================
+
+# M&A Keywords for filtering
+MA_KEYWORDS=["merger", "acquisition", "acquire", "divest", "subsidiary", "spin-off", "joint venture", "strategic alliance", "consolidation", "divestiture", "restructuring", "reorganization", "integration", "synergy"]
+
+# Entity Extraction Prompt Template
+ENTITY_EXTRACTION_PROMPT=Extract financial entities and relationships from this 10-K filing text. Focus on mergers, acquisitions, organizational changes, subsidiaries, and key personnel.
+
+# =============================================================================
+# Example Usage Commands
+# =============================================================================
+
+# To get started:
+# 1. Copy this file: cp env_example.txt .env
+# 2. Edit .env with your actual API keys and settings
+# 3. Start Neo4j: docker run -p 7474:7474 -p 7687:7687 -e NEO4J_AUTH=neo4j/password neo4j:latest
+# 4. Run setup: python -m financial_graph_rag.cli setup --years 2023 --limit-companies 10
+# 5. Analyze: python -m financial_graph_rag.cli analyze MSFT 

@@ -1,0 +1,22 @@
+# Additional requirements for Triplex extraction method
+# Install with: pip install -r requirements-triplex.txt
+
+# Core transformers library for Triplex model
+transformers>=4.30.0
+
+# PyTorch (choose one based on your system)
+# For CPU-only:
+# torch>=2.0.0+cpu -f https://download.pytorch.org/whl/torch_stable.html
+
+# For CUDA (GPU):
+torch>=2.0.0
+
+# For Apple Silicon (M1/M2) Macs:
+# torch>=2.0.0
+
+# Additional dependencies
+accelerate>=0.20.0
+safetensors>=0.3.0
+
+# Optional: For better performance
+# bitsandbytes>=0.39.0  # For quantization support 
