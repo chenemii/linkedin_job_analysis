@@ -3,10 +3,11 @@ Configuration settings for Financial Graph RAG system
 """
 
 import os
+import json
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Union
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -76,12 +77,25 @@ class Settings(BaseSettings):
         env="ENTITY_EXTRACTION_PROMPT")
 
     # M&A Analysis
-    ma_keywords: list = Field([
+    ma_keywords: List[str] = Field([
         "merger", "acquisition", "acquire", "divest", "subsidiary", "spin-off",
         "joint venture", "strategic alliance", "consolidation", "divestiture",
         "restructuring", "reorganization", "integration", "synergy"
     ],
                               env="MA_KEYWORDS")
+
+    @field_validator('ma_keywords', mode='before')
+    @classmethod
+    def parse_ma_keywords(cls, v):
+        """Parse MA_KEYWORDS from environment variable if it's a string"""
+        if isinstance(v, str):
+            try:
+                # Try to parse as JSON
+                return json.loads(v)
+            except json.JSONDecodeError:
+                # If not JSON, split by comma and strip whitespace
+                return [keyword.strip() for keyword in v.split(',') if keyword.strip()]
+        return v
 
     # Entity Extraction Method
     extraction_method: str = Field(
@@ -90,9 +104,11 @@ class Settings(BaseSettings):
     triplex_device: str = Field(
         "auto", env="TRIPLEX_DEVICE")  # "cuda", "cpu", or "auto"
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = {
+        "env_file": ".env",
+        "case_sensitive": False,
+        "extra": "ignore"  # Ignore extra fields from environment
+    }
 
 
 def get_settings() -> Settings:
