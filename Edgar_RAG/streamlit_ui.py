@@ -1117,26 +1117,193 @@ def display_company_skill_results(results: Dict, company_ticker: str):
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Documents Analyzed", results.get('documents_analyzed', 0))
+        # Use the correct field name from the analysis results
+        documents_analyzed = results.get('chunk_count', results.get('total_chunks_found', 0))
+        st.metric("Documents Analyzed", documents_analyzed)
     with col2:
-        st.metric("Skill Shortage Mentions", results.get('skill_shortage_mentions', 0))
+        # Get skill shortage mentions from skill_shortage_data if available
+        skill_shortage_data = results.get('skill_shortage_data', {})
+        skill_shortage_mentions = skill_shortage_data.get('total_mentions', 0)
+        st.metric("Skill Shortage Mentions", skill_shortage_mentions)
     with col3:
-        severity_score = results.get('severity_score', 0)
+        # Calculate severity score based on available data
+        severity_score = 0
+        if skill_shortage_data and not skill_shortage_data.get('error'):
+            avg_score = skill_shortage_data.get('average_score', 0)
+            # Convert to 0-10 scale (assuming original score is percentage-based)
+            severity_score = min(10, avg_score * 100) if avg_score else 0
         st.metric("Severity Score", f"{severity_score:.1f}/10")
     with col4:
         risk_level = "High" if severity_score > 7 else "Medium" if severity_score > 4 else "Low"
         st.metric("Risk Level", risk_level)
     
-    # Skill gaps
-    if 'skill_gaps' in results and results['skill_gaps']:
-        st.subheader("🎯 Identified Skill Gaps")
-        for i, gap in enumerate(results['skill_gaps'][:10], 1):
-            st.markdown(f'<div class="skill-gap-card">{i}. {gap}</div>', unsafe_allow_html=True)
+    # Display skill shortage analysis if available
+    if 'skill_shortage_analysis' in results:
+        st.subheader("📊 Skill Shortage Analysis")
+        st.markdown(f'<div class="skill-shortage-result">{results["skill_shortage_analysis"]}</div>', unsafe_allow_html=True)
     
-    # Detailed analysis
-    if 'analysis' in results:
-        st.subheader("📊 Detailed Analysis")
+    # Display general analysis if no specific skill shortage analysis
+    elif 'analysis' in results:
+        st.subheader("📊 Analysis")
         st.markdown(f'<div class="skill-shortage-result">{results["analysis"]}</div>', unsafe_allow_html=True)
+    
+    # Display document references and source chunks
+    if 'document_references' in results:
+        st.subheader("📄 Document References & Source Evidence")
+        
+        doc_refs = results['document_references']
+        
+        # Document reference summary
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Chunks Analyzed", doc_refs.get('total_chunks_analyzed', 0))
+        with col2:
+            doc_summary = doc_refs.get('document_summary', {})
+            st.metric("Unique Documents", doc_summary.get('unique_documents', 0))
+        with col3:
+            if doc_summary.get('highest_similarity_chunk'):
+                highest_sim = doc_summary['highest_similarity_chunk']['similarity_score']
+                st.metric("Highest Similarity", f"{highest_sim:.3f}")
+        
+        # Document summary table
+        if doc_summary.get('documents'):
+            st.subheader("📋 Source Documents Summary")
+            
+            doc_data = []
+            for doc in doc_summary['documents']:
+                doc_data.append({
+                    'Document ID': doc['document_id'],
+                    'Form Type': doc['form_type'],
+                    'Filing Date': doc['filing_date'],
+                    'Chunks Used': doc['total_chunks'],
+                    'Avg Similarity': f"{doc['avg_similarity']:.3f}",
+                    'Company': doc['company_name']
+                })
+            
+            doc_df = pd.DataFrame(doc_data)
+            st.dataframe(doc_df, use_container_width=True)
+        
+        # Detailed chunk references
+        if doc_refs.get('source_documents'):
+            st.subheader("🔍 Detailed Chunk References")
+            
+            # Create tabs for different views
+            tab1, tab2, tab3 = st.tabs(["📊 Chunk Summary", "📄 Full Content", "🔗 Metadata"])
+            
+            with tab1:
+                # Chunk summary table
+                chunk_data = []
+                for chunk in doc_refs['source_documents']:
+                    chunk_data.append({
+                        'Chunk #': chunk['chunk_index'],
+                        'Chunk ID': chunk['chunk_id'],
+                        'Similarity': f"{chunk['similarity_score']:.3f}",
+                        'Distance': f"{chunk['distance']:.3f}",
+                        'Size (chars)': chunk['chunk_size'],
+                        'Document ID': chunk['original_document_id'],
+                        'Form Type': chunk['form_type'],
+                        'Filing Date': chunk['filing_date']
+                    })
+                
+                chunk_df = pd.DataFrame(chunk_data)
+                
+                # Configure AgGrid for chunk table
+                gb = GridOptionsBuilder.from_dataframe(chunk_df)
+                gb.configure_pagination(paginationAutoPageSize=True)
+                gb.configure_selection('single', use_checkbox=True)
+                gb.configure_default_column(groupable=True, value=True, enableRowGroup=True, editable=False)
+                
+                grid_options = gb.build()
+                
+                grid_response = AgGrid(
+                    chunk_df,
+                    gridOptions=grid_options,
+                    data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+                    update_mode=GridUpdateMode.SELECTION_CHANGED,
+                    fit_columns_on_grid_load=True,
+                    theme='streamlit',
+                    height=400
+                )
+                
+                # Show selected chunk details
+                if grid_response['selected_rows'] is not None and len(grid_response['selected_rows']) > 0:
+                    selected_chunk_idx = int(grid_response['selected_rows'][0]['Chunk #']) - 1
+                    selected_chunk = doc_refs['source_documents'][selected_chunk_idx]
+                    
+                    st.subheader(f"📋 Chunk {selected_chunk['chunk_index']} Details")
+                    
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.markdown('<div class="document-content">', unsafe_allow_html=True)
+                        st.text_area("Chunk Content:", selected_chunk['content'], height=300, key=f"chunk_content_{selected_chunk_idx}")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                    
+                    with col2:
+                        st.markdown("**Chunk Metadata:**")
+                        st.write(f"**Similarity Score:** {selected_chunk['similarity_score']:.3f}")
+                        st.write(f"**Distance:** {selected_chunk['distance']:.3f}")
+                        st.write(f"**Chunk Size:** {selected_chunk['chunk_size']} characters")
+                        st.write(f"**Document ID:** {selected_chunk['original_document_id']}")
+                        st.write(f"**Form Type:** {selected_chunk['form_type']}")
+                        st.write(f"**Filing Date:** {selected_chunk['filing_date']}")
+                        
+                        if selected_chunk['metadata']:
+                            st.markdown("**Full Metadata:**")
+                            st.json(selected_chunk['metadata'])
+            
+            with tab2:
+                # Full content view
+                st.markdown("**All Chunks Used in Analysis (ordered by similarity):**")
+                
+                for i, chunk in enumerate(doc_refs['source_documents']):
+                    with st.expander(f"Chunk {chunk['chunk_index']} - Similarity: {chunk['similarity_score']:.3f} (ID: {chunk['chunk_id']})"):
+                        col1, col2 = st.columns([3, 1])
+                        
+                        with col1:
+                            st.markdown('<div class="document-content">', unsafe_allow_html=True)
+                            st.text(chunk['content'])
+                            st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        with col2:
+                            st.markdown("**Reference Info:**")
+                            st.write(f"Document: {chunk['original_document_id']}")
+                            st.write(f"Form: {chunk['form_type']}")
+                            st.write(f"Date: {chunk['filing_date']}")
+                            st.write(f"Size: {chunk['chunk_size']} chars")
+            
+            with tab3:
+                # Metadata view
+                st.markdown("**Chunk Metadata Details:**")
+                
+                for i, chunk in enumerate(doc_refs['source_documents']):
+                    with st.expander(f"Chunk {chunk['chunk_index']} Metadata"):
+                        st.json(chunk['metadata'])
+        
+        # Date range information
+        if doc_summary.get('date_range'):
+            date_range = doc_summary['date_range']
+            if date_range['earliest'] != 'Unknown' and date_range['latest'] != 'Unknown':
+                st.info(f"📅 **Analysis covers filings from {date_range['earliest']} to {date_range['latest']}**")
+    
+    # Display skill shortage data details if available
+    if skill_shortage_data and not skill_shortage_data.get('error'):
+        st.subheader("📈 Skill Shortage Details")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Filings Analyzed", skill_shortage_data.get('filings_analyzed', 0))
+            st.metric("Filings with Mentions", skill_shortage_data.get('filings_with_mentions', 0))
+        with col2:
+            years_data = skill_shortage_data.get('years_with_data', [])
+            if years_data:
+                st.metric("Years Covered", f"{min(years_data)}-{max(years_data)}")
+            else:
+                st.metric("Years Covered", "N/A")
+    
+    # Show if no skill shortage data was found
+    elif skill_shortage_data and skill_shortage_data.get('error'):
+        st.info(f"ℹ️ {skill_shortage_data['error']}")
+        st.info("💡 This analysis is based on document retrieval only. To get skill shortage statistics, run the skill shortage analysis pipeline first.")
     
     # Export options
     col1, col2 = st.columns(2)
@@ -1657,26 +1824,116 @@ def display_system_dashboard():
 
 def generate_skill_shortage_report(results: Dict, company_ticker: str):
     """Generate a comprehensive skill shortage report"""
+    # Get the correct document count
+    documents_analyzed = results.get('chunk_count', results.get('total_chunks_found', 0))
+    
+    # Get skill shortage data
+    skill_shortage_data = results.get('skill_shortage_data', {})
+    skill_shortage_mentions = skill_shortage_data.get('total_mentions', 0)
+    
+    # Calculate severity score
+    severity_score = 0
+    if skill_shortage_data and not skill_shortage_data.get('error'):
+        avg_score = skill_shortage_data.get('average_score', 0)
+        severity_score = min(10, avg_score * 100) if avg_score else 0
+    
     report = f"""
 # Skill Shortage Analysis Report
 ## Company: {company_ticker}
 ## Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
 ### Executive Summary
-- Documents Analyzed: {results.get('documents_analyzed', 0)}
-- Skill Shortage Mentions: {results.get('skill_shortage_mentions', 0)}
-- Severity Score: {results.get('severity_score', 0):.1f}/10
+- Documents Analyzed: {documents_analyzed}
+- Skill Shortage Mentions: {skill_shortage_mentions}
+- Severity Score: {severity_score:.1f}/10
 
-### Key Findings
+### Analysis Details
 """
     
-    if 'skill_gaps' in results:
-        report += "\n#### Identified Skill Gaps:\n"
-        for i, gap in enumerate(results['skill_gaps'][:10], 1):
-            report += f"{i}. {gap}\n"
+    # Add skill shortage analysis if available
+    if 'skill_shortage_analysis' in results:
+        report += f"\n#### Skill Shortage Analysis:\n{results['skill_shortage_analysis']}\n"
+    elif 'analysis' in results:
+        report += f"\n#### General Analysis:\n{results['analysis']}\n"
     
-    if 'analysis' in results:
-        report += f"\n#### Detailed Analysis:\n{results['analysis']}\n"
+    # Add document references section
+    if 'document_references' in results:
+        doc_refs = results['document_references']
+        report += f"\n### Document References & Source Evidence\n"
+        report += f"- Total chunks analyzed: {doc_refs.get('total_chunks_analyzed', 0)}\n"
+        
+        doc_summary = doc_refs.get('document_summary', {})
+        if doc_summary and not doc_summary.get('error'):
+            report += f"- Unique source documents: {doc_summary.get('unique_documents', 0)}\n"
+            
+            # Add date range
+            date_range = doc_summary.get('date_range', {})
+            if date_range.get('earliest') != 'Unknown' and date_range.get('latest') != 'Unknown':
+                report += f"- Filing date range: {date_range['earliest']} to {date_range['latest']}\n"
+            
+            # Add source documents
+            documents = doc_summary.get('documents', [])
+            if documents:
+                report += f"\n#### Source Documents:\n"
+                for i, doc in enumerate(documents, 1):
+                    report += f"{i}. **{doc['document_id']}**\n"
+                    report += f"   - Form Type: {doc['form_type']}\n"
+                    report += f"   - Filing Date: {doc['filing_date']}\n"
+                    report += f"   - Chunks Used: {doc['total_chunks']}\n"
+                    report += f"   - Average Similarity: {doc['avg_similarity']:.3f}\n\n"
+            
+            # Add highest similarity chunk
+            highest_chunk = doc_summary.get('highest_similarity_chunk')
+            if highest_chunk:
+                report += f"\n#### Highest Similarity Evidence:\n"
+                report += f"- Similarity Score: {highest_chunk['similarity_score']:.3f}\n"
+                report += f"- Chunk ID: {highest_chunk['id']}\n"
+        
+        # Add detailed chunk references
+        source_docs = doc_refs.get('source_documents', [])
+        if source_docs:
+            report += f"\n#### Detailed Source Evidence:\n"
+            
+            # Sort by similarity and show top chunks
+            sorted_chunks = sorted(source_docs, key=lambda x: x['similarity_score'], reverse=True)
+            for i, chunk in enumerate(sorted_chunks[:5], 1):  # Top 5 chunks
+                report += f"\n**Evidence Chunk {i}:**\n"
+                report += f"- Chunk ID: {chunk['chunk_id']}\n"
+                report += f"- Similarity Score: {chunk['similarity_score']:.3f}\n"
+                report += f"- Document: {chunk['original_document_id']}\n"
+                report += f"- Form Type: {chunk['form_type']}\n"
+                report += f"- Filing Date: {chunk['filing_date']}\n"
+                report += f"- Content Preview: {chunk['content'][:200]}{'...' if len(chunk['content']) > 200 else ''}\n"
+    
+    # Add skill shortage data details
+    if skill_shortage_data and not skill_shortage_data.get('error'):
+        report += f"""
+#### Skill Shortage Statistics:
+- Filings Analyzed: {skill_shortage_data.get('filings_analyzed', 0)}
+- Filings with Mentions: {skill_shortage_data.get('filings_with_mentions', 0)}
+- Average Score: {skill_shortage_data.get('average_score', 0):.4f}
+"""
+        years_data = skill_shortage_data.get('years_with_data', [])
+        if years_data:
+            report += f"- Years Covered: {min(years_data)}-{max(years_data)}\n"
+    
+    elif skill_shortage_data and skill_shortage_data.get('error'):
+        report += f"\n#### Note:\n{skill_shortage_data['error']}\n"
+        report += "This analysis is based on document retrieval only. To get detailed skill shortage statistics, run the skill shortage analysis pipeline first.\n"
+    
+    # Add methodology section
+    report += f"""
+### Methodology
+This analysis was conducted using the Financial Graph RAG system, which:
+1. Retrieved relevant document chunks from SEC filings
+2. Ranked chunks by semantic similarity to skill shortage queries
+3. Used AI analysis to interpret the evidence
+4. Provided source references for transparency and verification
+
+### Source Verification
+All findings are backed by specific document chunks from SEC filings. 
+Chunk IDs and similarity scores are provided for verification and further investigation.
+"""
     
     st.download_button(
         label="📄 Download Report",

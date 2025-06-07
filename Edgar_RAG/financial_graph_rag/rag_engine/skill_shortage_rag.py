@@ -158,7 +158,7 @@ class SkillShortageRAGEngine(VectorRAGEngine):
             analysis_focus: Specific aspect to analyze
             
         Returns:
-            Comprehensive skill shortage analysis results
+            Comprehensive skill shortage analysis results with document chunk references
         """
         logger.info(f"Analyzing skill shortage for {company_ticker}")
 
@@ -177,6 +177,9 @@ class SkillShortageRAGEngine(VectorRAGEngine):
         # Combine document context with skill shortage analysis
         document_context = base_analysis.get('document_context', '')
         
+        # Get the retrieved chunks for source references
+        retrieved_chunks = base_analysis.get('retrieved_chunks', [])
+        
         # Create analysis query
         query = f"Analyze {analysis_focus} for {company_ticker}"
 
@@ -191,12 +194,40 @@ class SkillShortageRAGEngine(VectorRAGEngine):
             response = self.llm.invoke(messages)
             skill_shortage_analysis = response.content
 
+            # Prepare source document references
+            source_documents = []
+            for i, chunk in enumerate(retrieved_chunks):
+                source_doc = {
+                    'chunk_id': chunk['id'],
+                    'chunk_index': i + 1,
+                    'similarity_score': chunk['similarity_score'],
+                    'distance': chunk['distance'],
+                    'content': chunk.get('content', ''),
+                    'metadata': chunk['metadata'],
+                    'chunk_size': chunk['chunk_size'],
+                    'original_document_id': chunk['metadata'].get('original_document_id', 'Unknown'),
+                    'filing_date': chunk['metadata'].get('filing_date', 'Unknown'),
+                    'form_type': chunk['metadata'].get('form_type', 'Unknown'),
+                    'company_name': chunk['metadata'].get('company_name', company_ticker)
+                }
+                source_documents.append(source_doc)
+
+            # Create document reference summary
+            document_references = {
+                'total_chunks_analyzed': len(retrieved_chunks),
+                'chunks_used_in_analysis': len(retrieved_chunks),
+                'source_documents': source_documents,
+                'document_summary': self._create_document_reference_summary(retrieved_chunks)
+            }
+
             # Combine results
             results = {
                 **base_analysis,
                 'skill_shortage_analysis': skill_shortage_analysis,
                 'skill_shortage_data': skill_shortage_data,
-                'analysis_type': 'skill_shortage'
+                'analysis_type': 'skill_shortage',
+                'document_references': document_references,
+                'source_documents': source_documents  # For backward compatibility
             }
 
             return results
@@ -206,8 +237,68 @@ class SkillShortageRAGEngine(VectorRAGEngine):
             return {
                 **base_analysis,
                 'skill_shortage_error': str(e),
-                'skill_shortage_data': skill_shortage_data
+                'skill_shortage_data': skill_shortage_data,
+                'document_references': {
+                    'total_chunks_analyzed': len(retrieved_chunks),
+                    'source_documents': retrieved_chunks,
+                    'error': f"Analysis failed: {str(e)}"
+                }
             }
+
+    def _create_document_reference_summary(self, chunks: List[Dict]) -> Dict:
+        """
+        Create a summary of document references used in analysis
+        
+        Args:
+            chunks: List of document chunks
+            
+        Returns:
+            Summary of document references
+        """
+        if not chunks:
+            return {'error': 'No document chunks available'}
+
+        # Group by original document
+        documents_by_id = {}
+        for chunk in chunks:
+            doc_id = chunk['metadata'].get('original_document_id', 'Unknown')
+            if doc_id not in documents_by_id:
+                documents_by_id[doc_id] = {
+                    'document_id': doc_id,
+                    'chunks': [],
+                    'total_chunks': 0,
+                    'filing_date': chunk['metadata'].get('filing_date', 'Unknown'),
+                    'form_type': chunk['metadata'].get('form_type', 'Unknown'),
+                    'company_name': chunk['metadata'].get('company_name', 'Unknown'),
+                    'avg_similarity': 0
+                }
+            
+            documents_by_id[doc_id]['chunks'].append({
+                'chunk_id': chunk['id'],
+                'chunk_index': chunk['metadata'].get('chunk_index', 0),
+                'similarity_score': chunk['similarity_score'],
+                'content_preview': chunk.get('content', '')[:200] + '...' if len(chunk.get('content', '')) > 200 else chunk.get('content', '')
+            })
+            documents_by_id[doc_id]['total_chunks'] += 1
+
+        # Calculate average similarity for each document
+        for doc_id, doc_info in documents_by_id.items():
+            if doc_info['chunks']:
+                doc_info['avg_similarity'] = sum(chunk['similarity_score'] for chunk in doc_info['chunks']) / len(doc_info['chunks'])
+
+        # Sort documents by average similarity
+        sorted_documents = sorted(documents_by_id.values(), key=lambda x: x['avg_similarity'], reverse=True)
+
+        return {
+            'unique_documents': len(documents_by_id),
+            'total_chunks': len(chunks),
+            'documents': sorted_documents,
+            'highest_similarity_chunk': max(chunks, key=lambda x: x['similarity_score']) if chunks else None,
+            'date_range': {
+                'earliest': min([chunk['metadata'].get('filing_date', '9999-12-31') for chunk in chunks if chunk['metadata'].get('filing_date')], default='Unknown'),
+                'latest': max([chunk['metadata'].get('filing_date', '0000-01-01') for chunk in chunks if chunk['metadata'].get('filing_date')], default='Unknown')
+            }
+        }
 
     def compare_skill_shortage_across_companies(self, 
                                               company_tickers: List[str] = None,

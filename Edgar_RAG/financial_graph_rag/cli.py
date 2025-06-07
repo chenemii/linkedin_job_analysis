@@ -530,15 +530,88 @@ def skill_shortage_company(company_ticker, focus, output, format):
             click.echo(f"Company: {company_info.get('name', 'Unknown')} ({company_info.get('ticker', 'N/A')})")
             click.echo(f"Sector: {company_info.get('sector', 'Unknown')}")
 
-        click.echo(f"Documents analyzed: {results.get('documents_analyzed', 0)}")
-        click.echo(f"Skill shortage mentions: {results.get('skill_shortage_mentions', 0)}")
-        click.echo(f"Severity score: {results.get('severity_score', 0):.2f}/10")
+        # Get the correct document count
+        documents_analyzed = results.get('chunk_count', results.get('total_chunks_found', 0))
+        click.echo(f"Documents analyzed: {documents_analyzed}")
+        
+        # Get skill shortage data
+        skill_shortage_data = results.get('skill_shortage_data', {})
+        skill_shortage_mentions = skill_shortage_data.get('total_mentions', 0)
+        click.echo(f"Skill shortage mentions: {skill_shortage_mentions}")
+        
+        # Calculate severity score
+        severity_score = 0
+        if skill_shortage_data and not skill_shortage_data.get('error'):
+            avg_score = skill_shortage_data.get('average_score', 0)
+            severity_score = min(10, avg_score * 100) if avg_score else 0
+        click.echo(f"Severity score: {severity_score:.2f}/10")
 
-        # Display specific skill gaps
-        if 'skill_gaps' in results:
-            click.echo(f"\n🎯 Identified Skill Gaps:")
-            for gap in results['skill_gaps'][:5]:
-                click.echo(f"  - {gap}")
+        # Display specific skill gaps if available in the analysis
+        if 'skill_shortage_analysis' in results:
+            click.echo(f"\n📊 Analysis:")
+            # Show first few lines of the analysis
+            analysis_lines = results['skill_shortage_analysis'].split('\n')[:5]
+            for line in analysis_lines:
+                if line.strip():
+                    click.echo(f"  {line.strip()}")
+        elif 'analysis' in results:
+            click.echo(f"\n📊 Analysis:")
+            analysis_lines = results['analysis'].split('\n')[:5]
+            for line in analysis_lines:
+                if line.strip():
+                    click.echo(f"  {line.strip()}")
+        
+        # Display document references if available
+        if 'document_references' in results:
+            doc_refs = results['document_references']
+            click.echo(f"\n📄 Document References:")
+            click.echo(f"Total chunks analyzed: {doc_refs.get('total_chunks_analyzed', 0)}")
+            
+            doc_summary = doc_refs.get('document_summary', {})
+            if doc_summary and not doc_summary.get('error'):
+                click.echo(f"Unique source documents: {doc_summary.get('unique_documents', 0)}")
+                
+                # Show date range
+                date_range = doc_summary.get('date_range', {})
+                if date_range.get('earliest') != 'Unknown' and date_range.get('latest') != 'Unknown':
+                    click.echo(f"Filing date range: {date_range['earliest']} to {date_range['latest']}")
+                
+                # Show top source documents
+                documents = doc_summary.get('documents', [])
+                if documents:
+                    click.echo(f"\n📋 Top Source Documents:")
+                    for i, doc in enumerate(documents[:3], 1):  # Show top 3
+                        click.echo(f"  {i}. {doc['document_id']}")
+                        click.echo(f"     Form: {doc['form_type']}, Date: {doc['filing_date']}")
+                        click.echo(f"     Chunks used: {doc['total_chunks']}, Avg similarity: {doc['avg_similarity']:.3f}")
+                
+                # Show highest similarity chunk info
+                highest_chunk = doc_summary.get('highest_similarity_chunk')
+                if highest_chunk:
+                    click.echo(f"\n🎯 Highest similarity chunk: {highest_chunk['similarity_score']:.3f}")
+            
+            # Show source documents summary
+            source_docs = doc_refs.get('source_documents', [])
+            if source_docs:
+                click.echo(f"\n🔍 Source Evidence Summary:")
+                click.echo(f"Chunks used in analysis: {len(source_docs)}")
+                
+                # Show top 3 chunks by similarity
+                sorted_chunks = sorted(source_docs, key=lambda x: x['similarity_score'], reverse=True)
+                click.echo(f"\nTop evidence chunks:")
+                for i, chunk in enumerate(sorted_chunks[:3], 1):
+                    click.echo(f"  {i}. Chunk {chunk['chunk_index']} (Similarity: {chunk['similarity_score']:.3f})")
+                    click.echo(f"     Document: {chunk['original_document_id']}")
+                    click.echo(f"     Form: {chunk['form_type']}, Date: {chunk['filing_date']}")
+                    # Show content preview
+                    content_preview = chunk['content'][:150] + "..." if len(chunk['content']) > 150 else chunk['content']
+                    click.echo(f"     Preview: {content_preview}")
+                    click.echo("")
+        
+        # Show note if no skill shortage data
+        if skill_shortage_data and skill_shortage_data.get('error'):
+            click.echo(f"\nℹ️  {skill_shortage_data['error']}")
+            click.echo("💡 To get detailed skill shortage statistics, run the skill shortage analysis pipeline first.")
 
         # Save to file if requested
         if output:
@@ -712,7 +785,7 @@ def analyze_csv(csv_path, limit, output):
         # Display summary stats
         if 'summary_stats' in results:
             stats = results['summary_stats']
-            click.echo(f"\n�� Summary Statistics:")
+            click.echo(f"\n📊 Summary Statistics:")
             click.echo(f"Total filings analyzed: {stats.get('total_filings_analyzed', 0)}")
             click.echo(f"Filings with mentions: {stats.get('filings_with_skill_shortage_mentions', 0)}")
             click.echo(f"Mention rate: {stats.get('skill_shortage_mention_rate', 0):.1%}")

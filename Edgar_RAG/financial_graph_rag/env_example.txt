@@ -7,7 +7,7 @@
 
 # Ollama Configuration (Local LLM - Default using OpenAI API format)
 OPENAI_API_KEY=ollama-local
-OPENAI_BASE_URL=http://localhost:11434/v1
+OPENAI_BASE_URL=http://192.168.12.90:11434/v1
 DEFAULT_LLM_PROVIDER=openai
 DEFAULT_LLM_MODEL=gemma3:27b
 
@@ -76,8 +76,8 @@ LLM_RATE_LIMIT=1.0
 # M&A Analysis Configuration
 # =============================================================================
 
-# M&A Keywords for filtering
-MA_KEYWORDS=["merger", "acquisition", "acquire", "divest", "subsidiary", "spin-off", "joint venture", "strategic alliance", "consolidation", "divestiture", "restructuring", "reorganization", "integration", "synergy"]
+# M&A Keywords for filtering (will use defaults from config.py if not specified)
+# MA_KEYWORDS=merger,acquisition,acquire,divest,subsidiary,spin-off,joint venture,strategic alliance,consolidation,divestiture,restructuring,reorganization,integration,synergy
 
 # Entity Extraction Prompt Template
 ENTITY_EXTRACTION_PROMPT=Extract financial entities and relationships from this 10-K filing text. Focus on mergers, acquisitions, organizational changes, subsidiaries, and key personnel.
