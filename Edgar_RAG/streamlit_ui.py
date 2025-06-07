@@ -2,7 +2,7 @@
 Streamlit UI for Financial Vector RAG System
 
 A comprehensive web interface for viewing vector store contents and querying
-the Financial Vector RAG system for M&A analysis.
+the Financial Vector RAG system for M&A analysis and skill shortage analysis.
 """
 
 import streamlit as st
@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Page configuration
-st.set_page_config(page_title="Financial Vector RAG Explorer",
+st.set_page_config(page_title="Financial Graph RAG Explorer",
                    page_icon="📊",
                    layout="wide",
                    initial_sidebar_state="expanded")
@@ -60,6 +60,13 @@ st.markdown("""
         border-left: 4px solid #28a745;
         margin-bottom: 1rem;
     }
+    .skill-shortage-result {
+        background-color: #fff3cd;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #ffc107;
+        margin-bottom: 1rem;
+    }
     .document-content {
         background-color: #fff;
         padding: 1rem;
@@ -76,6 +83,13 @@ st.markdown("""
         border-radius: 0.5rem;
         border: 1px solid #dee2e6;
         margin-bottom: 1rem;
+    }
+    .skill-gap-card {
+        background-color: #f8d7da;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #dc3545;
+        margin-bottom: 0.5rem;
     }
 </style>
 """,
@@ -1025,16 +1039,663 @@ def display_cross_company_raw_results(results: Dict, query: str, company: str,
                 st.info("No documents found for this company.")
 
 
+def display_skill_shortage_analysis():
+    """Display skill shortage analysis page"""
+    st.markdown('<h1 class="main-header">👥 Skill Shortage Analysis</h1>', unsafe_allow_html=True)
+    
+    # Analysis type selection
+    analysis_type = st.selectbox(
+        "Select Analysis Type",
+        ["Company Analysis", "Sector Comparison", "Trend Analysis", "Pipeline Analysis", "CSV Analysis"]
+    )
+    
+    if analysis_type == "Company Analysis":
+        display_company_skill_analysis()
+    elif analysis_type == "Sector Comparison":
+        display_sector_skill_comparison()
+    elif analysis_type == "Trend Analysis":
+        display_skill_trend_analysis()
+    elif analysis_type == "Pipeline Analysis":
+        display_skill_pipeline_analysis()
+    elif analysis_type == "CSV Analysis":
+        display_csv_skill_analysis()
+
+
+def display_company_skill_analysis():
+    """Display company-specific skill shortage analysis"""
+    st.subheader("🏢 Company Skill Shortage Analysis")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Company selection
+        companies = get_available_companies()
+        if not companies:
+            st.warning("No companies available. Please run the setup first.")
+            return
+            
+        company_options = [f"{c['company_ticker']} - {c['company_name']}" for c in companies]
+        selected_company = st.selectbox("Select Company", company_options)
+        company_ticker = selected_company.split(" - ")[0] if selected_company else None
+        
+        # Focus area
+        focus_area = st.text_input("Focus Area (optional)", 
+                                 placeholder="e.g., technology skills, healthcare professionals")
+    
+    with col2:
+        # Analysis options
+        st.markdown("**Analysis Options**")
+        include_trends = st.checkbox("Include trend analysis", value=True)
+        detailed_analysis = st.checkbox("Detailed analysis", value=False)
+        
+    if st.button("🔍 Analyze Company Skills", type="primary"):
+        if company_ticker:
+            with st.spinner(f"Analyzing skill shortages for {company_ticker}..."):
+                system = initialize_system()
+                if system:
+                    try:
+                        results = system.analyze_company_skill_shortage(
+                            company_ticker=company_ticker,
+                            focus_area=focus_area if focus_area else None
+                        )
+                        
+                        if 'error' not in results:
+                            display_company_skill_results(results, company_ticker)
+                        else:
+                            st.error(f"Analysis failed: {results['error']}")
+                    except Exception as e:
+                        st.error(f"Error during analysis: {e}")
+                else:
+                    st.error("System not available")
+
+
+def display_company_skill_results(results: Dict, company_ticker: str):
+    """Display company skill shortage analysis results"""
+    st.success(f"✅ Analysis completed for {company_ticker}")
+    
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Documents Analyzed", results.get('documents_analyzed', 0))
+    with col2:
+        st.metric("Skill Shortage Mentions", results.get('skill_shortage_mentions', 0))
+    with col3:
+        severity_score = results.get('severity_score', 0)
+        st.metric("Severity Score", f"{severity_score:.1f}/10")
+    with col4:
+        risk_level = "High" if severity_score > 7 else "Medium" if severity_score > 4 else "Low"
+        st.metric("Risk Level", risk_level)
+    
+    # Skill gaps
+    if 'skill_gaps' in results and results['skill_gaps']:
+        st.subheader("🎯 Identified Skill Gaps")
+        for i, gap in enumerate(results['skill_gaps'][:10], 1):
+            st.markdown(f'<div class="skill-gap-card">{i}. {gap}</div>', unsafe_allow_html=True)
+    
+    # Detailed analysis
+    if 'analysis' in results:
+        st.subheader("📊 Detailed Analysis")
+        st.markdown(f'<div class="skill-shortage-result">{results["analysis"]}</div>', unsafe_allow_html=True)
+    
+    # Export options
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📥 Download JSON"):
+            st.download_button(
+                label="Download Results",
+                data=json.dumps(results, indent=2),
+                file_name=f"{company_ticker}_skill_analysis.json",
+                mime="application/json"
+            )
+    with col2:
+        if st.button("📊 Generate Report"):
+            generate_skill_shortage_report(results, company_ticker)
+
+
+def display_sector_skill_comparison():
+    """Display sector skill shortage comparison"""
+    st.subheader("🏭 Sector Skill Shortage Comparison")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Sector selection
+        sectors = get_available_sectors()
+        if not sectors:
+            st.warning("No sector data available.")
+            return
+            
+        selected_sector = st.selectbox("Select Sector", ["All Sectors"] + sectors)
+        
+        # Company selection for comparison
+        companies = get_available_companies()
+        if selected_sector != "All Sectors":
+            # Filter companies by sector
+            sp500_companies = get_sp500_companies()
+            sector_companies = [c.symbol for c in sp500_companies if c.sector == selected_sector]
+            companies = [c for c in companies if c['company_ticker'] in sector_companies]
+        
+        company_options = [f"{c['company_ticker']} - {c['company_name']}" for c in companies]
+        selected_companies = st.multiselect("Select Companies (optional)", company_options)
+        company_tickers = [comp.split(" - ")[0] for comp in selected_companies] if selected_companies else None
+    
+    with col2:
+        st.markdown("**Comparison Options**")
+        include_trends = st.checkbox("Include trend data", value=True)
+        top_n = st.slider("Top N companies to show", 5, 20, 10)
+    
+    if st.button("🔍 Compare Skill Shortages", type="primary"):
+        with st.spinner("Comparing skill shortages across companies..."):
+            system = initialize_system()
+            if system:
+                try:
+                    results = system.compare_skill_shortage_across_companies(
+                        companies=company_tickers,
+                        sector=selected_sector if selected_sector != "All Sectors" else None
+                    )
+                    
+                    if 'error' not in results:
+                        display_sector_comparison_results(results, selected_sector)
+                    else:
+                        st.error(f"Comparison failed: {results['error']}")
+                except Exception as e:
+                    st.error(f"Error during comparison: {e}")
+
+
+def display_sector_comparison_results(results: Dict, sector: str):
+    """Display sector comparison results"""
+    st.success(f"✅ Comparison completed for {sector}")
+    
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Companies Compared", results.get('companies_compared', 0))
+    with col2:
+        avg_score = results.get('avg_severity_score', 0)
+        st.metric("Average Severity Score", f"{avg_score:.1f}/10")
+    with col3:
+        total_mentions = results.get('total_skill_shortage_mentions', 0)
+        st.metric("Total Skill Mentions", total_mentions)
+    
+    # Company rankings
+    if 'comparison_data' in results and results['comparison_data']:
+        st.subheader("📈 Company Rankings by Skill Shortage Severity")
+        
+        comparison_df = pd.DataFrame(results['comparison_data'])
+        comparison_df = comparison_df.sort_values('severity_score', ascending=False)
+        
+        # Create bar chart
+        fig = px.bar(
+            comparison_df.head(15),
+            x='company',
+            y='severity_score',
+            title=f"Skill Shortage Severity Scores - {sector}",
+            labels={'severity_score': 'Severity Score (0-10)', 'company': 'Company'},
+            color='severity_score',
+            color_continuous_scale='Reds'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Data table
+        st.subheader("📊 Detailed Comparison Data")
+        st.dataframe(comparison_df, use_container_width=True)
+
+
+def display_skill_trend_analysis():
+    """Display skill shortage trend analysis"""
+    st.subheader("📈 Skill Shortage Trend Analysis")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Year selection
+        current_year = datetime.now().year
+        years = st.multiselect(
+            "Select Years",
+            list(range(2018, current_year + 1)),
+            default=[current_year - 2, current_year - 1, current_year]
+        )
+        
+        # Sector selection
+        sectors = get_available_sectors()
+        selected_sector = st.selectbox("Select Sector (optional)", ["All Sectors"] + sectors)
+    
+    with col2:
+        st.markdown("**Analysis Options**")
+        include_predictions = st.checkbox("Include predictions", value=False)
+        granularity = st.selectbox("Time Granularity", ["Yearly", "Quarterly"])
+    
+    if st.button("📊 Analyze Trends", type="primary"):
+        if years:
+            with st.spinner("Analyzing skill shortage trends..."):
+                system = initialize_system()
+                if system:
+                    try:
+                        results = system.analyze_skill_shortage_trends(
+                            years=years,
+                            sector=selected_sector if selected_sector != "All Sectors" else None
+                        )
+                        
+                        if 'error' not in results:
+                            display_trend_analysis_results(results, years, selected_sector)
+                        else:
+                            st.error(f"Trend analysis failed: {results['error']}")
+                    except Exception as e:
+                        st.error(f"Error during trend analysis: {e}")
+        else:
+            st.warning("Please select at least one year.")
+
+
+def display_trend_analysis_results(results: Dict, years: List[int], sector: str):
+    """Display trend analysis results"""
+    st.success(f"✅ Trend analysis completed for {years}")
+    
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Data Points", results.get('data_points', 0))
+    with col2:
+        st.metric("Companies Covered", results.get('companies_covered', 0))
+    with col3:
+        st.metric("Years Analyzed", len(results.get('years_covered', [])))
+    
+    # Trend visualization
+    if 'trend_analysis' in results and 'yearly_trends' in results['trend_analysis']:
+        st.subheader("📈 Yearly Skill Shortage Trends")
+        
+        yearly_data = results['trend_analysis']['yearly_trends']
+        trend_df = pd.DataFrame([
+            {
+                'Year': int(year),
+                'Total Mentions': data['total_mentions'],
+                'Mention Rate': data['mention_rate'] * 100,
+                'Companies Affected': data.get('companies_affected', 0)
+            }
+            for year, data in yearly_data.items()
+        ])
+        
+        # Line chart for trends
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=trend_df['Year'],
+            y=trend_df['Mention Rate'],
+            mode='lines+markers',
+            name='Mention Rate (%)',
+            line=dict(color='red', width=3)
+        ))
+        
+        fig.update_layout(
+            title=f"Skill Shortage Mention Rate Over Time - {sector}",
+            xaxis_title="Year",
+            yaxis_title="Mention Rate (%)",
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Data table
+        st.subheader("📊 Trend Data")
+        st.dataframe(trend_df, use_container_width=True)
+
+
+def display_skill_pipeline_analysis():
+    """Display comprehensive skill shortage pipeline analysis"""
+    st.subheader("🔄 Comprehensive Skill Shortage Pipeline")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Configuration options
+        years = st.multiselect(
+            "Select Years",
+            list(range(2018, datetime.now().year + 1)),
+            default=[datetime.now().year - 1, datetime.now().year]
+        )
+        
+        company_limit = st.slider("Company Limit", 10, 500, 100)
+    
+    with col2:
+        st.markdown("**Pipeline Options**")
+        include_trends = st.checkbox("Include trend analysis", value=True)
+        include_predictions = st.checkbox("Include predictions", value=False)
+        detailed_output = st.checkbox("Detailed output", value=True)
+    
+    if st.button("🚀 Run Pipeline Analysis", type="primary"):
+        if years:
+            with st.spinner("Running comprehensive skill shortage analysis pipeline..."):
+                system = initialize_system()
+                if system:
+                    try:
+                        results = system.run_skill_shortage_analysis_pipeline(
+                            years=years,
+                            company_limit=company_limit
+                        )
+                        
+                        if 'error' not in results:
+                            display_pipeline_results(results)
+                        else:
+                            st.error(f"Pipeline analysis failed: {results['error']}")
+                    except Exception as e:
+                        st.error(f"Error during pipeline analysis: {e}")
+        else:
+            st.warning("Please select at least one year.")
+
+
+def display_pipeline_results(results: Dict):
+    """Display pipeline analysis results"""
+    st.success("✅ Pipeline analysis completed successfully!")
+    
+    # Key metrics dashboard
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Companies Analyzed", results.get('companies_analyzed', 0))
+    with col2:
+        st.metric("Skill Shortage Mentions", results.get('skill_shortage_mentions', 0))
+    with col3:
+        st.metric("Critical Skill Gaps", results.get('critical_skill_gaps', 0))
+    with col4:
+        avg_severity = results.get('avg_severity_score', 0)
+        st.metric("Average Severity", f"{avg_severity:.1f}/10")
+    
+    # Key findings
+    if 'key_findings' in results and results['key_findings']:
+        st.subheader("🎯 Key Findings")
+        for i, finding in enumerate(results['key_findings'][:10], 1):
+            st.markdown(f"**{i}.** {finding}")
+    
+    # Sector breakdown
+    if 'sector_breakdown' in results:
+        st.subheader("🏭 Sector Breakdown")
+        sector_df = pd.DataFrame(results['sector_breakdown'])
+        
+        fig = px.pie(
+            sector_df,
+            values='skill_shortage_mentions',
+            names='sector',
+            title="Skill Shortage Mentions by Sector"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def display_csv_skill_analysis():
+    """Display CSV-based skill shortage analysis"""
+    st.subheader("📄 CSV Data Analysis")
+    
+    st.markdown("""
+    Upload a CSV file with company filing data to analyze skill shortages.
+    Expected columns: `cik`, `Year`, `FName`, `gvkey`
+    """)
+    
+    uploaded_file = st.file_uploader("Choose CSV file", type="csv")
+    
+    if uploaded_file is not None:
+        # Preview the data
+        df = pd.read_csv(uploaded_file)
+        st.subheader("📊 Data Preview")
+        st.dataframe(df.head(), use_container_width=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            limit = st.slider("Processing Limit", 10, len(df), min(100, len(df)))
+        with col2:
+            st.metric("Total Rows", len(df))
+        
+        if st.button("🔍 Analyze CSV Data", type="primary"):
+            with st.spinner("Analyzing skill shortages from CSV data..."):
+                # Save uploaded file temporarily
+                temp_path = f"temp_{uploaded_file.name}"
+                df.to_csv(temp_path, index=False)
+                
+                system = initialize_system()
+                if system:
+                    try:
+                        results = system.analyze_from_csv_data(
+                            csv_path=temp_path,
+                            limit=limit
+                        )
+                        
+                        if 'error' not in results:
+                            display_csv_analysis_results(results)
+                        else:
+                            st.error(f"CSV analysis failed: {results['error']}")
+                    except Exception as e:
+                        st.error(f"Error during CSV analysis: {e}")
+                    finally:
+                        # Clean up temp file
+                        import os
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+
+
+def display_csv_analysis_results(results: Dict):
+    """Display CSV analysis results"""
+    st.success("✅ CSV analysis completed!")
+    
+    # Summary statistics
+    if 'summary_stats' in results:
+        stats = results['summary_stats']
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total Filings Analyzed", stats.get('total_filings_analyzed', 0))
+        with col2:
+            st.metric("Filings with Skill Mentions", stats.get('filings_with_skill_shortage_mentions', 0))
+        with col3:
+            mention_rate = stats.get('skill_shortage_mention_rate', 0)
+            st.metric("Mention Rate", f"{mention_rate:.1%}")
+    
+    # Analysis results
+    if 'analysis_results' in results:
+        st.subheader("📊 Analysis Results")
+        st.write(results['analysis_results'])
+    
+    # Significant findings
+    if 'significant_findings' in results:
+        st.subheader("🎯 Significant Findings")
+        st.write(results['significant_findings'])
+
+
+def display_trends_analytics():
+    """Display trends and analytics dashboard"""
+    st.markdown('<h1 class="main-header">📈 Trends & Analytics Dashboard</h1>', unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs(["M&A Trends", "Skill Shortage Trends", "Comparative Analytics"])
+    
+    with tab1:
+        display_ma_trends_tab()
+    
+    with tab2:
+        display_skill_trends_tab()
+    
+    with tab3:
+        display_comparative_analytics_tab()
+
+
+def display_ma_trends_tab():
+    """Display M&A trends analysis"""
+    st.subheader("🔄 M&A Organizational Impact Trends")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        years = st.multiselect(
+            "Select Years",
+            list(range(2018, datetime.now().year + 1)),
+            default=[datetime.now().year - 2, datetime.now().year - 1]
+        )
+        
+        sectors = get_available_sectors()
+        selected_sector = st.selectbox("Select Sector", ["All Sectors"] + sectors)
+    
+    with col2:
+        st.markdown("**Analysis Options**")
+        include_predictions = st.checkbox("Include predictions", value=False)
+    
+    if st.button("📊 Analyze M&A Trends", type="primary"):
+        if years:
+            with st.spinner("Analyzing M&A trends..."):
+                system = initialize_system()
+                if system:
+                    try:
+                        results = system.analyze_trends(
+                            years=years,
+                            sector=selected_sector if selected_sector != "All Sectors" else None
+                        )
+                        
+                        if 'error' not in results:
+                            display_ma_trend_results(results, years, selected_sector)
+                        else:
+                            st.error(f"M&A trend analysis failed: {results['error']}")
+                    except Exception as e:
+                        st.error(f"Error during M&A trend analysis: {e}")
+
+
+def display_ma_trend_results(results: Dict, years: List[int], sector: str):
+    """Display M&A trend analysis results"""
+    st.success(f"✅ M&A trend analysis completed for {sector}")
+    
+    # Summary metrics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Data Points", results.get('data_points', 0))
+    with col2:
+        st.metric("Companies Covered", results.get('companies_covered', 0))
+    with col3:
+        st.metric("Years Analyzed", len(results.get('years_covered', [])))
+    
+    # Trend visualization
+    if 'trend_analysis' in results and 'yearly_trends' in results['trend_analysis']:
+        yearly_data = results['trend_analysis']['yearly_trends']
+        trend_df = pd.DataFrame([
+            {
+                'Year': int(year),
+                'Total Events': data['total_events'],
+                'Avg Impact Score': data['avg_impact_score']
+            }
+            for year, data in yearly_data.items()
+        ])
+        
+        fig = px.line(
+            trend_df,
+            x='Year',
+            y='Avg Impact Score',
+            title=f"M&A Impact Trends - {sector}",
+            markers=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+
+def display_skill_trends_tab():
+    """Display skill shortage trends tab"""
+    st.subheader("👥 Skill Shortage Trends")
+    st.info("Use the Skill Shortage Analysis page for detailed trend analysis.")
+
+
+def display_comparative_analytics_tab():
+    """Display comparative analytics"""
+    st.subheader("⚖️ Comparative Analytics")
+    
+    st.markdown("""
+    Compare M&A organizational impacts with skill shortage patterns to identify correlations
+    and insights across companies and sectors.
+    """)
+    
+    if st.button("🔍 Run Comparative Analysis", type="primary"):
+        with st.spinner("Running comparative analysis..."):
+            # This would implement cross-analysis between M&A and skill shortage data
+            st.info("Comparative analysis feature coming soon!")
+
+
+def display_system_dashboard():
+    """Display comprehensive system dashboard"""
+    st.markdown('<h1 class="main-header">⚙️ System Dashboard</h1>', unsafe_allow_html=True)
+    
+    # System status
+    status = get_system_status()
+    
+    if status:
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            vector_status = status.get('vector_store', {})
+            st.metric("Company Collections", vector_status.get('company_collections', 0))
+        
+        with col2:
+            st.metric("Total Documents", vector_status.get('total_documents', 0))
+        
+        with col3:
+            sp500_status = status.get('sp500_data', {})
+            st.metric("S&P 500 Companies", sp500_status.get('companies_loaded', 0))
+        
+        with col4:
+            edgar_status = status.get('edgar_data', {})
+            st.metric("EDGAR Filings", edgar_status.get('filings_cached', 0))
+        
+        # Detailed status information
+        st.subheader("📊 Detailed System Information")
+        
+        tab1, tab2, tab3 = st.tabs(["Vector Store", "Data Sources", "System Health"])
+        
+        with tab1:
+            st.json(vector_status)
+        
+        with tab2:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown("**S&P 500 Data**")
+                st.json(sp500_status)
+            with col2:
+                st.markdown("**EDGAR Data**")
+                st.json(edgar_status)
+        
+        with tab3:
+            st.success("✅ All systems operational")
+            st.info("Last updated: " + datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    else:
+        st.error("❌ System status unavailable")
+
+
+def generate_skill_shortage_report(results: Dict, company_ticker: str):
+    """Generate a comprehensive skill shortage report"""
+    report = f"""
+# Skill Shortage Analysis Report
+## Company: {company_ticker}
+## Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+### Executive Summary
+- Documents Analyzed: {results.get('documents_analyzed', 0)}
+- Skill Shortage Mentions: {results.get('skill_shortage_mentions', 0)}
+- Severity Score: {results.get('severity_score', 0):.1f}/10
+
+### Key Findings
+"""
+    
+    if 'skill_gaps' in results:
+        report += "\n#### Identified Skill Gaps:\n"
+        for i, gap in enumerate(results['skill_gaps'][:10], 1):
+            report += f"{i}. {gap}\n"
+    
+    if 'analysis' in results:
+        report += f"\n#### Detailed Analysis:\n{results['analysis']}\n"
+    
+    st.download_button(
+        label="📄 Download Report",
+        data=report,
+        file_name=f"{company_ticker}_skill_shortage_report.md",
+        mime="text/markdown"
+    )
+
+
 def main():
     """Main application"""
-    st.sidebar.title("🏦 Financial Vector RAG")
+    st.sidebar.title("🏦 Financial Graph RAG")
     st.sidebar.markdown("---")
 
     # Navigation menu
     selected = option_menu(
         menu_title=None,
-        options=["Vector Store Overview", "Query Interface"],
-        icons=["database", "search"],
+        options=["Vector Store Overview", "M&A Query Interface", "Skill Shortage Analysis", "Trends & Analytics", "System Dashboard"],
+        icons=["database", "search", "people", "graph-up", "speedometer2"],
         menu_icon="cast",
         default_index=0,
         orientation="horizontal",
@@ -1061,26 +1722,58 @@ def main():
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 💡 Tips")
-    st.sidebar.markdown("""
-    **Query Types:**
-    - **Company-Specific**: Focus on one company
-    - **Sector Analysis**: Analyze entire sectors
-    - **Custom Selection**: Compare specific companies
-    - **Cross-Company**: Search across all companies
     
-    **Sample Queries:**
-    - "cultural integration challenges"
-    - "organizational restructuring"
-    - "synergies cost savings"
-    - "post-merger integration"
-    - "leadership changes acquisition"
-    """)
+    if selected == "M&A Query Interface":
+        st.sidebar.markdown("""
+        **Query Types:**
+        - **Company-Specific**: Focus on one company
+        - **Sector Analysis**: Analyze entire sectors
+        - **Custom Selection**: Compare specific companies
+        - **Cross-Company**: Search across all companies
+        
+        **Sample M&A Queries:**
+        - "cultural integration challenges"
+        - "organizational restructuring"
+        - "synergies cost savings"
+        - "post-merger integration"
+        - "leadership changes acquisition"
+        """)
+    elif selected == "Skill Shortage Analysis":
+        st.sidebar.markdown("""
+        **Analysis Types:**
+        - **Company Analysis**: Skill gaps for specific companies
+        - **Sector Comparison**: Compare skill shortages across sectors
+        - **Trend Analysis**: Track skill shortage patterns over time
+        - **Pipeline Analysis**: Comprehensive skill shortage review
+        
+        **Sample Focus Areas:**
+        - "technology skills"
+        - "healthcare professionals"
+        - "data science talent"
+        - "cybersecurity expertise"
+        - "digital transformation skills"
+        """)
+    else:
+        st.sidebar.markdown("""
+        **Navigation:**
+        - **Vector Store**: View data overview
+        - **M&A Queries**: Search M&A impacts
+        - **Skill Analysis**: Analyze skill shortages
+        - **Trends**: View analytics and trends
+        - **Dashboard**: System status and metrics
+        """)
 
     # Main content
     if selected == "Vector Store Overview":
         display_company_overview()
-    elif selected == "Query Interface":
+    elif selected == "M&A Query Interface":
         display_query_interface()
+    elif selected == "Skill Shortage Analysis":
+        display_skill_shortage_analysis()
+    elif selected == "Trends & Analytics":
+        display_trends_analytics()
+    elif selected == "System Dashboard":
+        display_system_dashboard()
 
 
 if __name__ == "__main__":

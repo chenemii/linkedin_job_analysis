@@ -11,15 +11,16 @@ from pathlib import Path
 import json
 
 from .config import settings
-from .data_collectors import SP500Collector, EdgarFilingCollector, SP500Company, EdgarFiling
+from .data_collectors import SP500Collector, EdgarFilingCollector, SP500Company, EdgarFiling, SkillShortageAnalyzer
 from .rag_engine.vector_rag import VectorRAGEngine
+from .rag_engine.skill_shortage_rag import SkillShortageRAGEngine
 
 logger = logging.getLogger(__name__)
 
 
 class FinancialVectorRAG:
     """
-    Main Financial Vector RAG system for M&A organizational structure analysis
+    Main Financial Vector RAG system for M&A organizational structure analysis and skill shortage analysis
     """
 
     def __init__(self):
@@ -30,6 +31,8 @@ class FinancialVectorRAG:
         self.sp500_collector = SP500Collector()
         self.edgar_collector = EdgarFilingCollector()
         self.rag_engine = VectorRAGEngine()
+        self.skill_shortage_analyzer = SkillShortageAnalyzer()
+        self.skill_shortage_rag = SkillShortageRAGEngine()
 
         logger.info("Financial Vector RAG system initialized")
 
@@ -607,3 +610,212 @@ Focus on the most relevant information from the highest-scoring chunks."""
                 f"Error getting company analysis summary for {company_ticker}: {e}"
             )
             return {'company_ticker': company_ticker, 'error': str(e)}
+
+    def analyze_company_skill_shortage(self, 
+                                     company_ticker: str,
+                                     analysis_focus: str = "comprehensive skill shortage analysis") -> Dict:
+        """
+        Analyze skill shortage issues for a specific company
+        
+        Args:
+            company_ticker: Company ticker symbol
+            analysis_focus: Specific aspect to analyze
+            
+        Returns:
+            Comprehensive skill shortage analysis results
+        """
+        logger.info(f"Analyzing skill shortage for {company_ticker}")
+
+        # Get company information
+        company = self.sp500_collector.get_company_by_symbol(company_ticker)
+        if not company:
+            available_companies = self.rag_engine.get_available_companies()
+            return {
+                'error': f"Company {company_ticker} not found in S&P 500",
+                'available_companies': [c['company_ticker'] for c in available_companies]
+            }
+
+        # Use Skill Shortage RAG engine for analysis
+        results = self.skill_shortage_rag.analyze_company_skill_shortage(
+            company_ticker=company_ticker,
+            analysis_focus=analysis_focus
+        )
+
+        # Add company context
+        results['company_info'] = {
+            'name': company.name,
+            'ticker': company.symbol,
+            'cik': company.cik,
+            'sector': company.sector,
+            'headquarters': company.headquarters
+        }
+
+        return results
+
+    def run_skill_shortage_analysis_pipeline(self,
+                                           years: List[int] = [2022, 2023],
+                                           limit_companies: Optional[int] = None,
+                                           save_results: bool = True) -> Dict:
+        """
+        Run the complete skill shortage analysis pipeline
+        
+        Args:
+            years: Years of filings to analyze
+            limit_companies: Optional limit on number of companies
+            save_results: Whether to save results to files
+            
+        Returns:
+            Pipeline execution results
+        """
+        logger.info("Starting skill shortage analysis pipeline")
+
+        results = {
+            'companies_analyzed': 0,
+            'filings_analyzed': 0,
+            'skill_shortage_findings': 0,
+            'errors': []
+        }
+
+        try:
+            # Step 1: Get companies and filings (reuse existing data if available)
+            companies = self.sp500_collector.collect_all()
+            companies_with_cik = self.sp500_collector.get_companies_with_cik()
+
+            if limit_companies:
+                companies_with_cik = companies_with_cik[:limit_companies]
+
+            # Load existing filings if available
+            if not self.edgar_collector.load_cache():
+                logger.info("No cached filings found, downloading new filings")
+                filings = self.edgar_collector.download_10k_filings(
+                    companies_with_cik, years, limit_filings_per_company=2)
+            else:
+                logger.info("Using cached filings")
+                filings = self.edgar_collector.filings
+
+            results['companies_analyzed'] = len(companies_with_cik)
+            results['filings_analyzed'] = len(filings)
+
+            # Step 2: Run skill shortage analysis
+            logger.info("Running skill shortage analysis on filings")
+            skill_shortage_results = self.skill_shortage_analyzer.analyze_edgar_filings(
+                filings=filings,
+                companies=companies_with_cik
+            )
+
+            # Count significant findings
+            significant_findings = self.skill_shortage_analyzer.filter_significant_findings()
+            results['skill_shortage_findings'] = len(significant_findings)
+
+            # Step 3: Add to vector store for enhanced retrieval
+            logger.info("Adding skill shortage analysis to vector store")
+            self.skill_shortage_rag.add_skill_shortage_analysis_to_vector_store(
+                skill_shortage_results
+            )
+
+            # Step 4: Save results if requested
+            if save_results:
+                output_path = self.skill_shortage_analyzer.save_results()
+                self.skill_shortage_analyzer.save_cache()
+                results['output_file'] = output_path
+
+            logger.info("Skill shortage analysis pipeline completed successfully")
+
+        except Exception as e:
+            error_msg = f"Error in skill shortage analysis pipeline: {e}"
+            logger.error(error_msg)
+            results['errors'].append(error_msg)
+
+        return results
+
+    def compare_skill_shortage_across_companies(self,
+                                              company_tickers: List[str] = None,
+                                              sector: str = None,
+                                              analysis_focus: str = "comparative skill shortage analysis") -> Dict:
+        """
+        Compare skill shortage patterns across multiple companies
+        
+        Args:
+            company_tickers: Optional list of specific companies to compare
+            sector: Optional sector filter
+            analysis_focus: Specific aspect to analyze
+            
+        Returns:
+            Comparative skill shortage analysis results
+        """
+        logger.info("Performing comparative skill shortage analysis")
+
+        return self.skill_shortage_rag.compare_skill_shortage_across_companies(
+            company_tickers=company_tickers,
+            sector=sector,
+            analysis_focus=analysis_focus
+        )
+
+    def analyze_skill_shortage_trends(self,
+                                    years: List[int] = None,
+                                    sector: str = None) -> Dict:
+        """
+        Analyze skill shortage trends over time and across sectors
+        
+        Args:
+            years: Optional list of years to analyze
+            sector: Optional sector filter
+            
+        Returns:
+            Trend analysis results
+        """
+        logger.info("Analyzing skill shortage trends")
+
+        return self.skill_shortage_rag.analyze_skill_shortage_trends(
+            years=years,
+            sector=sector
+        )
+
+    def get_skill_shortage_summary_stats(self) -> Dict:
+        """
+        Get summary statistics about skill shortage analysis
+        
+        Returns:
+            Summary statistics
+        """
+        return self.skill_shortage_analyzer.get_summary_stats()
+
+    def analyze_from_csv_data(self, 
+                            csv_path: str,
+                            limit: Optional[int] = None) -> Dict:
+        """
+        Analyze skill shortage from CSV data (similar to the original provided code)
+        
+        Args:
+            csv_path: Path to CSV file with columns: cik, Year, FName, gvkey
+            limit: Optional limit on number of filings to process
+            
+        Returns:
+            Analysis results
+        """
+        logger.info(f"Analyzing skill shortage from CSV data: {csv_path}")
+
+        try:
+            import pandas as pd
+            df = pd.read_csv(csv_path)
+            
+            # Run analysis
+            results = self.skill_shortage_analyzer.analyze_from_urls(df, limit=limit)
+            
+            # Save results
+            output_path = self.skill_shortage_analyzer.save_results()
+            self.skill_shortage_analyzer.save_cache()
+            
+            # Get summary stats
+            stats = self.skill_shortage_analyzer.get_summary_stats()
+            
+            return {
+                'analysis_results': len(results),
+                'significant_findings': len([r for r in results if r.skill_shortage_mentions > 0]),
+                'output_file': output_path,
+                'summary_stats': stats
+            }
+            
+        except Exception as e:
+            logger.error(f"Error analyzing CSV data: {e}")
+            return {'error': str(e)}
