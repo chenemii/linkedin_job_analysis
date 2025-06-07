@@ -1096,7 +1096,7 @@ def display_company_skill_analysis():
                     try:
                         results = system.analyze_company_skill_shortage(
                             company_ticker=company_ticker,
-                            focus_area=focus_area if focus_area else None
+                            analysis_focus=focus_area if focus_area else None
                         )
                         
                         if 'error' not in results:
@@ -1191,7 +1191,7 @@ def display_sector_skill_comparison():
             if system:
                 try:
                     results = system.compare_skill_shortage_across_companies(
-                        companies=company_tickers,
+                        company_tickers=company_tickers,
                         sector=selected_sector if selected_sector != "All Sectors" else None
                     )
                     
@@ -1368,7 +1368,7 @@ def display_skill_pipeline_analysis():
                     try:
                         results = system.run_skill_shortage_analysis_pipeline(
                             years=years,
-                            company_limit=company_limit
+                            limit_companies=company_limit
                         )
                         
                         if 'error' not in results:
