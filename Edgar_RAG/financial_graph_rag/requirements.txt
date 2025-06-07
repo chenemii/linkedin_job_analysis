@@ -62,5 +62,6 @@ streamlit-option-menu>=0.3.6
 # Utilities
 python-dotenv>=1.0.0
 pydantic>=2.0.0
+pydantic-settings>=2.0.0
 click>=8.1.0
 tqdm>=4.65.0 

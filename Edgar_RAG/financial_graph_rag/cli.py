@@ -57,18 +57,23 @@ def setup(years, limit, force):
 
         # Setup data pipeline
         results = system.setup_data_pipeline(
-            years=list(years) if years else None,
-            company_limit=limit,
-            force_refresh=force)
+            years=list(years) if years else [2022, 2023],
+            limit_companies=limit)
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
             raise click.ClickException("Setup failed")
 
         click.echo(f"\n✅ Setup completed successfully!")
-        click.echo(f"📊 Companies processed: {results.get('companies_processed', 0)}")
-        click.echo(f"📄 Documents collected: {results.get('documents_collected', 0)}")
-        click.echo(f"🔍 Vector embeddings created: {results.get('embeddings_created', 0)}")
+        click.echo(f"📊 Companies collected: {results.get('companies_collected', 0)}")
+        click.echo(f"📄 Filings downloaded: {results.get('filings_downloaded', 0)}")
+        click.echo(f"🔍 Documents stored: {results.get('documents_stored', 0)}")
+        click.echo(f"🏢 Company collections created: {results.get('company_collections_created', 0)}")
+
+        if results.get('errors'):
+            click.echo(f"\n⚠️  Errors encountered: {len(results['errors'])}")
+            for error in results['errors'][:3]:  # Show first 3 errors
+                click.echo(f"  - {error}")
 
         system.close()
 
@@ -105,9 +110,8 @@ def analyze(years, limit, output):
     try:
         system = FinancialVectorRAG()
 
-        results = system.analyze_ma_organizational_impacts(
-            years=list(years) if years else None,
-            company_limit=limit)
+        # Get M&A trends analysis instead
+        results = system.get_ma_trends_analysis()
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
@@ -130,8 +134,6 @@ def analyze(years, limit, output):
             success = system.export_analysis_report(results, output, 'json')
             if success:
                 click.echo(f"\n💾 Analysis saved to: {output}")
-            else:
-                click.echo(f"\n❌ Failed to save analysis to: {output}")
 
         system.close()
 
@@ -165,9 +167,7 @@ def trends(years, sector, output):
     try:
         system = FinancialVectorRAG()
 
-        results = system.analyze_trends(
-            years=list(years) if years else None,
-            sector=sector)
+        results = system.get_ma_trends_analysis(sector=sector)
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
@@ -221,35 +221,32 @@ def similar(reference_company, criteria, output):
     try:
         system = FinancialVectorRAG()
 
-        results = system.find_similar_companies(
+        results = system.search_similar_ma_cases(
             reference_company=reference_company.upper(),
             similarity_criteria=criteria)
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
-            raise click.ClickException("Similar companies analysis failed")
+            raise click.ClickException("Similar companies search failed")
 
         # Display results
-        click.echo(f"\n🏢 Companies similar to {reference_company.upper()}:")
-        for company in results.get('similar_companies', [])[:10]:
-            click.echo(
-                f"  - {company['ticker']}: {company['name']} (Score: {company.get('similarity_score', 'N/A')})"
-            )
+        click.echo(f"\n🎯 Similar Companies Found:")
+        if 'similar_companies' in results:
+            for i, company in enumerate(results['similar_companies'][:10], 1):
+                click.echo(f"  {i}. {company.get('company_name', 'Unknown')} "
+                         f"({company.get('ticker', 'N/A')}) - "
+                         f"Similarity: {company.get('similarity_score', 0):.2f}")
 
         # Save to file if requested
         if output:
             success = system.export_analysis_report(results, output, 'json')
             if success:
-                click.echo(f"\n💾 Similar companies analysis saved to: {output}")
-            else:
-                click.echo(
-                    f"\n❌ Failed to save similar companies analysis to: {output}"
-                )
+                click.echo(f"\n💾 Results saved to: {output}")
 
         system.close()
 
     except Exception as e:
-        click.echo(f"❌ Error during similar companies analysis: {e}")
+        click.echo(f"❌ Error finding similar companies: {e}")
         raise click.ClickException(str(e))
 
 
@@ -461,8 +458,8 @@ def skill_shortage_pipeline(years, limit, output):
         system = FinancialVectorRAG()
 
         results = system.run_skill_shortage_analysis_pipeline(
-            years=list(years) if years else None,
-            company_limit=limit)
+            years=list(years) if years else [2022, 2023],
+            limit_companies=limit)
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
@@ -471,14 +468,16 @@ def skill_shortage_pipeline(years, limit, output):
         # Display results summary
         click.echo(f"\n📊 Skill Shortage Analysis Results:")
         click.echo(f"Companies analyzed: {results.get('companies_analyzed', 0)}")
-        click.echo(f"Skill shortage mentions found: {results.get('skill_shortage_mentions', 0)}")
-        click.echo(f"Critical skill gaps identified: {results.get('critical_skill_gaps', 0)}")
+        click.echo(f"Filings analyzed: {results.get('filings_analyzed', 0)}")
+        click.echo(f"Skill shortage findings: {results.get('skill_shortage_findings', 0)}")
 
-        # Display key findings
-        if 'key_findings' in results:
-            click.echo(f"\n🎯 Key Findings:")
-            for finding in results['key_findings'][:5]:
-                click.echo(f"  - {finding}")
+        if results.get('output_file'):
+            click.echo(f"📄 Results saved to: {results['output_file']}")
+
+        if results.get('errors'):
+            click.echo(f"\n⚠️  Errors encountered: {len(results['errors'])}")
+            for error in results['errors'][:3]:  # Show first 3 errors
+                click.echo(f"  - {error}")
 
         # Save to file if requested
         if output:
@@ -518,7 +517,7 @@ def skill_shortage_company(company_ticker, focus, output, format):
 
         results = system.analyze_company_skill_shortage(
             company_ticker=company_ticker.upper(),
-            focus_area=focus)
+            analysis_focus=focus if focus else "comprehensive skill shortage analysis")
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
@@ -526,6 +525,11 @@ def skill_shortage_company(company_ticker, focus, output, format):
 
         # Display results
         click.echo(f"\n📊 Skill Shortage Analysis for {company_ticker.upper()}:")
+        if 'company_info' in results:
+            company_info = results['company_info']
+            click.echo(f"Company: {company_info.get('name', 'Unknown')} ({company_info.get('ticker', 'N/A')})")
+            click.echo(f"Sector: {company_info.get('sector', 'Unknown')}")
+
         click.echo(f"Documents analyzed: {results.get('documents_analyzed', 0)}")
         click.echo(f"Skill shortage mentions: {results.get('skill_shortage_mentions', 0)}")
         click.echo(f"Severity score: {results.get('severity_score', 0):.2f}/10")
@@ -575,7 +579,7 @@ def skill_shortage_compare(companies, sector, output):
         system = FinancialVectorRAG()
 
         results = system.compare_skill_shortage_across_companies(
-            companies=list(companies) if companies else None,
+            company_tickers=list(companies) if companies else None,
             sector=sector)
 
         if 'error' in results:
@@ -708,7 +712,7 @@ def analyze_csv(csv_path, limit, output):
         # Display summary stats
         if 'summary_stats' in results:
             stats = results['summary_stats']
-            click.echo(f"\n📈 Summary Statistics:")
+            click.echo(f"\n�� Summary Statistics:")
             click.echo(f"Total filings analyzed: {stats.get('total_filings_analyzed', 0)}")
             click.echo(f"Filings with mentions: {stats.get('filings_with_skill_shortage_mentions', 0)}")
             click.echo(f"Mention rate: {stats.get('skill_shortage_mention_rate', 0):.1%}")
