@@ -439,6 +439,7 @@ class VectorRAGEngine:
                     'id': chunk['id'],
                     'similarity_score': chunk['score'],
                     'distance': chunk['distance'],
+                    'content': chunk['content'],
                     'metadata': chunk['metadata'],
                     'chunk_size': len(chunk['content'])
                 } for chunk in selected_chunks]
