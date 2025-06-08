@@ -304,22 +304,31 @@ def query(query, limit, context):
     try:
         system = FinancialVectorRAG()
 
-        results = system.query(query_text=query,
-                             max_results=limit,
-                             include_context=context)
+        # Use the correct method name
+        results = system.analyze_cross_company_query(
+            query=query,
+            top_k_per_company=limit)
 
         if 'error' in results:
             click.echo(f"❌ {results['error']}")
             raise click.ClickException("Query failed")
 
         # Display results
-        click.echo(f"\n📋 Query Results ({len(results.get('results', []))} found):")
-        for i, result in enumerate(results.get('results', []), 1):
-            click.echo(f"\n{i}. {result.get('title', 'Untitled')}")
-            click.echo(f"   Company: {result.get('company', 'Unknown')}")
-            click.echo(f"   Relevance: {result.get('score', 0):.3f}")
-            if context and 'context' in result:
-                click.echo(f"   Context: {result['context'][:200]}...")
+        click.echo(f"\n📋 Query Results:")
+        click.echo(f"Companies searched: {results.get('companies_searched', 0)}")
+        click.echo(f"Companies with results: {results.get('companies_with_results', 0)}")
+        click.echo(f"Total chunks found: {results.get('total_chunks_found', 0)}")
+        
+        # Display analysis
+        if 'analysis' in results:
+            click.echo(f"\n📄 Analysis:")
+            click.echo(results['analysis'])
+        
+        # Display company summaries if available
+        if context and 'company_summaries' in results:
+            click.echo(f"\n📊 Company Summaries:")
+            for company, summary in results['company_summaries'].items():
+                click.echo(f"\n{company}: {summary}")
 
         system.close()
 

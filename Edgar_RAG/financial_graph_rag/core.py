@@ -611,6 +611,102 @@ Focus on the most relevant information from the highest-scoring chunks."""
             )
             return {'company_ticker': company_ticker, 'error': str(e)}
 
+    def get_company_info(self, ticker: str, detailed: bool = False) -> Dict:
+        """
+        Get information about a specific company
+        
+        Args:
+            ticker: Company ticker symbol
+            detailed: Whether to include detailed information
+            
+        Returns:
+            Company information dictionary
+        """
+        try:
+            # Get company from S&P 500 data
+            company = self.sp500_collector.get_company_by_symbol(ticker)
+            
+            if not company:
+                return {
+                    'error': f'Company {ticker} not found in S&P 500 data'
+                }
+            
+            # Get vector store statistics
+            stats = self.rag_engine.get_company_statistics(ticker)
+            
+            result = {
+                'ticker': company.symbol,
+                'name': company.name,
+                'sector': company.sector,
+                'headquarters': company.headquarters,
+                'document_count': stats.get('document_count', 0)
+            }
+            
+            if detailed:
+                result['detailed_info'] = {
+                    'cik': company.cik,
+                    'sub_industry': company.sub_industry,
+                    'date_added': company.date_added,
+                    'founded': company.founded,
+                    'vector_store_stats': stats,
+                    'recent_ma_events': []  # Placeholder for M&A events
+                }
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting company info for {ticker}: {e}")
+            return {'error': str(e)}
+
+    def cleanup_system(self) -> Dict:
+        """
+        Clean up temporary files and reset the system
+        
+        Returns:
+            Cleanup results
+        """
+        try:
+            import shutil
+            from pathlib import Path
+            
+            files_removed = 0
+            space_freed = 0
+            
+            # Clean up cache directories
+            cache_dirs = [
+                Path(settings.cache_directory),
+                Path(settings.chroma_persist_directory),
+            ]
+            
+            for cache_dir in cache_dirs:
+                if cache_dir.exists():
+                    # Calculate size before deletion
+                    total_size = sum(f.stat().st_size for f in cache_dir.rglob('*') if f.is_file())
+                    space_freed += total_size
+                    
+                    # Count files
+                    file_count = len(list(cache_dir.rglob('*')))
+                    files_removed += file_count
+                    
+                    # Remove directory
+                    shutil.rmtree(cache_dir)
+                    
+            # Recreate cache directory
+            Path(settings.cache_directory).mkdir(parents=True, exist_ok=True)
+            Path(settings.chroma_persist_directory).mkdir(parents=True, exist_ok=True)
+            
+            # Convert bytes to MB
+            space_freed_mb = space_freed / (1024 * 1024)
+            
+            return {
+                'files_removed': files_removed,
+                'space_freed': f'{space_freed_mb:.2f} MB'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            return {'error': str(e)}
+
     def analyze_company_skill_shortage(self, 
                                      company_ticker: str,
                                      analysis_focus: str = "comprehensive skill shortage analysis") -> Dict:
@@ -779,6 +875,121 @@ Focus on the most relevant information from the highest-scoring chunks."""
             Summary statistics
         """
         return self.skill_shortage_analyzer.get_summary_stats()
+
+    def get_system_statistics(self) -> Dict:
+        """
+        Get comprehensive system statistics
+        
+        Returns:
+            System statistics dictionary
+        """
+        try:
+            # Get basic system status
+            status = self.get_system_status()
+            
+            # Get available companies
+            companies = self.rag_engine.get_available_companies()
+            
+            # Calculate additional statistics
+            total_documents = sum(c.get('document_count', 0) for c in companies)
+            
+            # Get years covered from document metadata
+            years_covered = set()
+            for company_data in companies:
+                company_ticker = company_data['company_ticker']
+                try:
+                    stats = self.rag_engine.get_company_statistics(company_ticker)
+                    sample_dates = stats.get('sample_filing_dates', [])
+                    for date in sample_dates:
+                        if isinstance(date, str) and len(date) >= 4:
+                            year = date[:4]
+                            if year.isdigit():
+                                years_covered.add(int(year))
+                except:
+                    continue
+            
+            return {
+                'total_companies': len(companies),
+                'total_documents': total_documents,
+                'total_embeddings': total_documents,  # Approximate
+                'years_covered': sorted(list(years_covered)),
+                'companies_with_data': [c['company_ticker'] for c in companies if c.get('document_count', 0) > 0],
+                'system_status': status.get('status', 'unknown'),
+                'recent_activity': [
+                    f"Vector store contains {len(companies)} company collections",
+                    f"Total of {total_documents} documents indexed",
+                    f"Covering years: {min(years_covered) if years_covered else 'N/A'} - {max(years_covered) if years_covered else 'N/A'}",
+                    f"Data sources: S&P 500, EDGAR filings"
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting system statistics: {e}")
+            return {'error': str(e)}
+
+    def analyze_trends(self, 
+                      years: List[int] = None,
+                      sector: str = None,
+                      focus_area: str = "M&A trends") -> Dict:
+        """
+        Analyze trends in M&A or skill shortage data
+        
+        Args:
+            years: Optional list of years to analyze
+            sector: Optional sector filter
+            focus_area: Type of trends to analyze
+            
+        Returns:
+            Trend analysis results
+        """
+        logger.info(f"Analyzing trends: {focus_area}")
+        
+        try:
+            if "skill" in focus_area.lower():
+                # Use skill shortage trend analysis
+                return self.analyze_skill_shortage_trends(years=years, sector=sector)
+            else:
+                # Use M&A trend analysis
+                return self.get_ma_trends_analysis(sector=sector)
+                
+        except Exception as e:
+            logger.error(f"Error in trend analysis: {e}")
+            return {'error': str(e), 'focus_area': focus_area}
+
+    def get_skill_shortage_statistics(self) -> Dict:
+        """
+        Get skill shortage analysis statistics
+        
+        Returns:
+            Skill shortage statistics
+        """
+        try:
+            # Get basic stats from analyzer
+            basic_stats = self.get_skill_shortage_summary_stats()
+            
+            # Get companies with skill shortage data
+            companies = self.rag_engine.get_available_companies()
+            
+            # Calculate additional metrics
+            total_companies_analyzed = len([c for c in companies if c.get('document_count', 0) > 0])
+            
+            return {
+                'total_companies_analyzed': total_companies_analyzed,
+                'total_skill_shortage_mentions': basic_stats.get('total_mentions', 0),
+                'avg_severity_score': basic_stats.get('average_severity', 0),
+                'most_affected_sectors': basic_stats.get('top_sectors', []),
+                'recent_findings': [
+                    f"Analyzed {total_companies_analyzed} companies",
+                    f"Found {basic_stats.get('total_mentions', 0)} skill shortage mentions",
+                    f"Average severity: {basic_stats.get('average_severity', 0):.2f}/10",
+                    "Skill shortage data available in vector store",
+                    "Ready for detailed company analysis"
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting skill shortage statistics: {e}")
+            return {'error': str(e)}
 
     def analyze_from_csv_data(self, 
                             csv_path: str,
