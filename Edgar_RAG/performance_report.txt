@@ -1,0 +1,28 @@
+
+=== Financial Graph RAG Performance Report ===
+
+Initialization Times:
+- Import time: 15.87s
+- System init: 9.61s
+- RAG engine init: 0.00s
+- Skill analyzer init: 0.00s
+- Total init time: 25.48s
+
+Memory Usage:
+- Total memory: 442.8MB
+
+System Resources:
+- CPU usage: 10.7%
+- Memory usage: 62.0%
+- Available memory: 12.1GB
+- Disk usage: 1.1%
+
+Cache Performance:
+- Cache files: 2
+- Cache size: 52.5MB
+- Cache path: /Users/emilychen/Documents/work/linkedin_job_analysis/Edgar_RAG/cache
+
+Performance Recommendations:
+- ✅ Initialization time is acceptable.
+- ✅ Memory usage is reasonable.
+- ✅ System memory usage is good.

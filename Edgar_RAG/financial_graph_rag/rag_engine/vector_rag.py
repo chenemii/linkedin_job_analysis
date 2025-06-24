@@ -7,6 +7,8 @@ Each company gets its own collection to reduce noise and improve precision.
 """
 
 import logging
+import time
+import random
 from typing import List, Dict, Optional, Any, Set
 import json
 import re
@@ -25,6 +27,72 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 
+def log_llm_request(llm, messages, context=""):
+    """
+    Wrapper function to log LLM requests with full URL for debugging
+    """
+    # Try multiple ways to get the base URL
+    base_url = None
+    model_name = getattr(llm, 'model_name', 'unknown')
+    
+    # Method 1: Check if it's a ChatOpenAI instance with client
+    if hasattr(llm, 'client') and hasattr(llm.client, 'base_url'):
+        base_url = str(llm.client.base_url)
+    
+    # Method 2: Check for openai_api_base attribute
+    elif hasattr(llm, 'openai_api_base'):
+        base_url = str(llm.openai_api_base)
+    
+    # Method 3: Check for base_url attribute directly
+    elif hasattr(llm, 'base_url'):
+        base_url = str(llm.base_url)
+    
+    # Method 4: Check client._base_url (newer OpenAI client versions)
+    elif hasattr(llm, 'client') and hasattr(llm.client, '_base_url'):
+        base_url = str(llm.client._base_url)
+    
+    # Method 5: Check for default OpenAI endpoint
+    elif 'openai' in str(type(llm)).lower():
+        # Default OpenAI endpoint
+        base_url = "https://api.openai.com/v1"
+    
+    if base_url:
+        # Ensure the URL ends with the chat completions endpoint
+        if not base_url.endswith('/chat/completions'):
+            if base_url.endswith('/v1'):
+                full_url = f"{base_url}/chat/completions"
+            else:
+                full_url = f"{base_url}/v1/chat/completions"
+        else:
+            full_url = base_url
+            
+        logger.info(f"Making LLM request {context} to: {full_url}")
+        logger.info(f"Model: {model_name}")
+    else:
+        logger.info(f"Making LLM request {context} (URL detection failed)")
+        logger.info(f"Model: {model_name}")
+        logger.info(f"LLM type: {type(llm)}")
+    
+    return llm.invoke(messages)
+
+
+def retry_with_backoff(func, max_retries=3, base_delay=1.0):
+    """Retry function with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                raise e
+            
+            # Calculate delay with jitter
+            delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+            logger.warning(f"Attempt {attempt + 1} failed: {e}. Retrying in {delay:.2f}s...")
+            time.sleep(delay)
+    
+    raise Exception(f"Failed after {max_retries} attempts")
+
+
 class VectorRAGEngine:
     """
     Vector Store RAG engine for financial analysis using company-specific collections
@@ -32,10 +100,7 @@ class VectorRAGEngine:
 
     def __init__(self):
         """Initialize the Vector RAG engine"""
-        # Initialize components
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-
-        # Initialize vector database
+        # Initialize vector database first
         self.chroma_client = chromadb.PersistentClient(
             path=settings.chroma_persist_directory)
 
@@ -47,15 +112,33 @@ class VectorRAGEngine:
 
         # Track company collections
         self._company_collections: Dict[str, chromadb.Collection] = {}
+        
+        # Delay embedding model initialization to avoid fork issues
+        self._embedding_model = None
+
+    @property
+    def embedding_model(self):
+        """Lazy load embedding model to avoid fork issues"""
+        if self._embedding_model is None:
+            logger.info("Loading SentenceTransformer model...")
+            self._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            logger.info("SentenceTransformer model loaded successfully")
+        return self._embedding_model
 
     def _initialize_llm(self):
         """Initialize the language model"""
         if settings.default_llm_provider == "openai":
+            # Log the full URL for debugging
+            base_url = getattr(settings, 'openai_base_url', None)
+            logger.info(f"Initializing OpenAI client with base_url: {base_url}")
+            logger.info(f"Full chat completions URL: {base_url}/chat/completions")
+            
             return ChatOpenAI(model=settings.default_llm_model,
                               temperature=0.1,
                               api_key=settings.openai_api_key,
-                              base_url=getattr(settings, 'openai_base_url',
-                                               None))
+                              base_url=base_url,
+                              timeout=30,  # Add timeout
+                              max_retries=3)  # Add retries
         elif settings.default_llm_provider == "anthropic":
             return ChatAnthropic(model=settings.default_llm_model,
                                  temperature=0.1,
@@ -415,11 +498,15 @@ class VectorRAGEngine:
                 for i, chunk in enumerate(selected_chunks)
             ])
 
-            # Generate analysis using LLM
+            # Generate analysis using LLM with retry logic
             prompt = self.analysis_prompt.format_prompt(
                 document_context=document_context, query=query)
 
-            response = self.llm.invoke(prompt.to_messages())
+            def llm_call():
+                return log_llm_request(self.llm, prompt.to_messages(), f"for {company_ticker} M&A analysis")
+            
+            # Use retry logic for LLM call
+            response = retry_with_backoff(llm_call, max_retries=3, base_delay=2.0)
             analysis = response.content
 
             return {

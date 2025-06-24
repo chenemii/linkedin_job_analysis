@@ -34,6 +34,55 @@ from .entities import (BaseEntity, Relationship, EntityType, RelationshipType,
 logger = logging.getLogger(__name__)
 
 
+def log_llm_request(llm, messages, context=""):
+    """
+    Wrapper function to log LLM requests with full URL for debugging
+    """
+    # Try multiple ways to get the base URL
+    base_url = None
+    model_name = getattr(llm, 'model_name', 'unknown')
+    
+    # Method 1: Check if it's a ChatOpenAI instance with client
+    if hasattr(llm, 'client') and hasattr(llm.client, 'base_url'):
+        base_url = str(llm.client.base_url)
+    
+    # Method 2: Check for openai_api_base attribute
+    elif hasattr(llm, 'openai_api_base'):
+        base_url = str(llm.openai_api_base)
+    
+    # Method 3: Check for base_url attribute directly
+    elif hasattr(llm, 'base_url'):
+        base_url = str(llm.base_url)
+    
+    # Method 4: Check client._base_url (newer OpenAI client versions)
+    elif hasattr(llm, 'client') and hasattr(llm.client, '_base_url'):
+        base_url = str(llm.client._base_url)
+    
+    # Method 5: Check for default OpenAI endpoint
+    elif 'openai' in str(type(llm)).lower():
+        # Default OpenAI endpoint
+        base_url = "https://api.openai.com/v1"
+    
+    if base_url:
+        # Ensure the URL ends with the chat completions endpoint
+        if not base_url.endswith('/chat/completions'):
+            if base_url.endswith('/v1'):
+                full_url = f"{base_url}/chat/completions"
+            else:
+                full_url = f"{base_url}/v1/chat/completions"
+        else:
+            full_url = base_url
+            
+        logger.info(f"Making LLM request {context} to: {full_url}")
+        logger.info(f"Model: {model_name}")
+    else:
+        logger.info(f"Making LLM request {context} (URL detection failed)")
+        logger.info(f"Model: {model_name}")
+        logger.info(f"LLM type: {type(llm)}")
+    
+    return llm.invoke(messages)
+
+
 class EntityRelationshipExtractor:
     """
     Extracts entities and relationships from financial documents using LLMs or Triplex
@@ -78,11 +127,15 @@ class EntityRelationshipExtractor:
     def _initialize_llm(self):
         """Initialize the language model based on provider"""
         if self.llm_provider == "openai":
+            # Log the full URL for debugging
+            base_url = getattr(settings, 'openai_base_url', None)
+            logger.info(f"Initializing OpenAI client with base_url: {base_url}")
+            logger.info(f"Full chat completions URL: {base_url}/chat/completions")
+            
             return ChatOpenAI(model=self.model_name,
                               temperature=0.1,
                               api_key=settings.openai_api_key,
-                              base_url=getattr(settings, 'openai_base_url',
-                                               None))
+                              base_url=base_url)
         elif self.llm_provider == "anthropic":
             return ChatAnthropic(model=self.model_name,
                                  temperature=0.1,
@@ -350,7 +403,7 @@ class EntityRelationshipExtractor:
             prompt = self.entity_extraction_prompt.format(text=chunk)
 
             # Get LLM response
-            response = self.llm.invoke(prompt)
+            response = log_llm_request(self.llm, prompt, "for entity extraction")
 
             # Clean and parse JSON response
             result = self._parse_json_response(response.content, chunk_id)
@@ -864,7 +917,7 @@ class EntityRelationshipExtractor:
                 entities=json.dumps(entities_json, indent=2), text=chunk)
 
             # Get LLM response
-            response = self.llm.invoke(prompt)
+            response = log_llm_request(self.llm, prompt, "for relationship extraction")
 
             # Clean and parse JSON response
             result = self._parse_json_response(response.content, chunk_id)
@@ -1268,7 +1321,7 @@ class EntityRelationshipExtractor:
         """
         try:
             prompt = self.ma_context_prompt.format(text=text)
-            response = self.llm.invoke(prompt)
+            response = log_llm_request(self.llm, prompt, "for M&A context analysis")
 
             # Use improved JSON parsing
             result = self._parse_json_response(response.content, "ma_context")

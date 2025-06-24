@@ -388,6 +388,10 @@ def examples():
         ("Skill shortage analysis", "financial-rag skill-shortage-pipeline --years 2020 2021"),
         ("Company skill analysis", "financial-rag skill-shortage-company AAPL"),
         ("Skill shortage trends", "financial-rag skill-shortage-trends --sector tech"),
+        ("Hiring difficulties pipeline", "financial-rag hiring-difficulties-pipeline --years 2022 2023"),
+        ("Company hiring analysis", "financial-rag hiring-difficulties-company AAPL"),
+        ("Hiring difficulties rankings", "financial-rag hiring-difficulties-rankings --recent-only"),
+        ("Hiring difficulties stats", "financial-rag hiring-difficulties-stats"),
     ]
 
     for description, command in examples:
@@ -546,25 +550,44 @@ def skill_shortage_company(company_ticker, focus, output, format):
         # Get skill shortage data
         skill_shortage_data = results.get('skill_shortage_data', {})
         skill_shortage_mentions = skill_shortage_data.get('total_mentions', 0)
-        click.echo(f"Skill shortage mentions: {skill_shortage_mentions}")
+        likelihood_score = skill_shortage_data.get('average_likelihood_score', 0)
+        recent_summary = skill_shortage_data.get('recent_summary', '')
         
-        # Calculate severity score
-        severity_score = 0
-        if skill_shortage_data and not skill_shortage_data.get('error'):
-            avg_score = skill_shortage_data.get('average_score', 0)
-            severity_score = min(10, avg_score * 100) if avg_score else 0
-        click.echo(f"Severity score: {severity_score:.2f}/10")
+        click.echo(f"Skill shortage mentions: {skill_shortage_mentions}")
+        click.echo(f"AI Likelihood Score: {likelihood_score:.1f}/10")
+        
+        # Determine risk level
+        if likelihood_score >= 7:
+            risk_level = "High Risk"
+        elif likelihood_score >= 5:
+            risk_level = "Medium Risk"
+        elif likelihood_score >= 3:
+            risk_level = "Low Risk"
+        else:
+            risk_level = "Very Low Risk"
+        click.echo(f"Risk Level: {risk_level}")
+        
+        # Display AI summary if available
+        if recent_summary:
+            click.echo(f"\n🤖 AI Summary:")
+            # Show first few lines of the summary
+            summary_lines = recent_summary.split('\n')[:3]
+            for line in summary_lines:
+                if line.strip():
+                    click.echo(f"  {line.strip()}")
+            if len(recent_summary.split('\n')) > 3:
+                click.echo("  ...")
 
         # Display specific skill gaps if available in the analysis
         if 'skill_shortage_analysis' in results:
-            click.echo(f"\n📊 Analysis:")
+            click.echo(f"\n📊 Detailed Analysis:")
             # Show first few lines of the analysis
             analysis_lines = results['skill_shortage_analysis'].split('\n')[:5]
             for line in analysis_lines:
                 if line.strip():
                     click.echo(f"  {line.strip()}")
         elif 'analysis' in results:
-            click.echo(f"\n📊 Analysis:")
+            click.echo(f"\n📊 General Analysis:")
             analysis_lines = results['analysis'].split('\n')[:5]
             for line in analysis_lines:
                 if line.strip():
@@ -837,7 +860,272 @@ def skill_shortage_stats():
         system.close()
 
     except Exception as e:
-        click.echo(f"❌ Error getting statistics: {e}")
+        click.echo(f"❌ Error getting skill shortage statistics: {e}")
+        raise click.ClickException(str(e))
+
+
+# Hiring Difficulties Analysis Commands
+
+@cli.command()
+@click.option('--years',
+              '-y',
+              multiple=True,
+              type=int,
+              help='Specific years to analyze (can specify multiple)')
+@click.option('--limit',
+              '-l',
+              type=int,
+              help='Limit number of companies to analyze')
+@click.option('--output',
+              '-o',
+              type=click.Path(),
+              help='Output file path for results')
+def hiring_difficulties_pipeline(years, limit, output):
+    """Run the complete hiring difficulties analysis pipeline"""
+    
+    click.echo("🚀 Starting Hiring Difficulties Analysis Pipeline")
+    
+    # Default to recent years if none specified
+    if not years:
+        years = [2022, 2023]
+        click.echo(f"📅 Using default years: {list(years)}")
+    else:
+        years = list(years)
+        click.echo(f"📅 Analyzing years: {years}")
+    
+    if limit:
+        click.echo(f"🏢 Limiting to {limit} companies")
+    
+    try:
+        system = FinancialVectorRAG()
+        
+        # Run the pipeline
+        results = system.run_hiring_difficulties_analysis_pipeline(
+            years=years,
+            limit_companies=limit,
+            save_results=True
+        )
+        
+        if 'errors' in results and results['errors']:
+            click.echo("⚠️ Pipeline completed with errors:")
+            for error in results['errors']:
+                click.echo(f"  - {error}")
+        
+        # Display results
+        click.echo(f"\n✅ Pipeline completed successfully!")
+        click.echo(f"Companies analyzed: {results.get('companies_analyzed', 0)}")
+        click.echo(f"Filings analyzed: {results.get('filings_analyzed', 0)}")
+        click.echo(f"Hiring difficulty findings: {results.get('hiring_difficulty_findings', 0)}")
+        
+        if 'output_file' in results:
+            click.echo(f"📄 Results saved to: {results['output_file']}")
+        
+        # Save to custom output if specified
+        if output:
+            rankings = system.rank_companies_by_hiring_difficulties()
+            export_path = system.export_hiring_difficulties_rankings(
+                rankings=rankings,
+                output_path=output
+            )
+            click.echo(f"📊 Rankings exported to: {export_path}")
+        
+        system.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error during hiring difficulties analysis: {e}")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.argument('company_ticker')
+@click.option('--focus',
+              '-f',
+              help='Focus area for analysis (e.g., "technical skills", "labor shortage")')
+@click.option('--output',
+              '-o',
+              type=click.Path(),
+              help='Output file path for results')
+@click.option('--format',
+              type=click.Choice(['json', 'csv', 'txt']),
+              default='json',
+              help='Output format')
+def hiring_difficulties_company(company_ticker, focus, output, format):
+    """Analyze hiring difficulties for a specific company"""
+    
+    company_ticker = company_ticker.upper()
+    click.echo(f"🔍 Analyzing hiring difficulties for {company_ticker}")
+    
+    if focus:
+        click.echo(f"🎯 Focus area: {focus}")
+    
+    try:
+        system = FinancialVectorRAG()
+        
+        # Get analysis focus
+        analysis_focus = focus if focus else "comprehensive hiring difficulties analysis"
+        
+        # Run analysis
+        results = system.analyze_company_hiring_difficulties(
+            company_ticker=company_ticker,
+            analysis_focus=analysis_focus
+        )
+        
+        if 'error' in results:
+            click.echo(f"❌ {results['error']}")
+            if 'available_companies' in results:
+                click.echo("Available companies:")
+                for ticker in results['available_companies'][:10]:
+                    click.echo(f"  - {ticker}")
+            raise click.ClickException("Company analysis failed")
+        
+        # Display results
+        click.echo(f"\n📊 Hiring Difficulties Analysis for {company_ticker}")
+        
+        if 'company_info' in results:
+            info = results['company_info']
+            click.echo(f"Company: {info.get('name', 'Unknown')}")
+            click.echo(f"Sector: {info.get('sector', 'Unknown')}")
+            click.echo(f"Headquarters: {info.get('headquarters', 'Unknown')}")
+        
+        if 'hiring_difficulty_score' in results:
+            score = results['hiring_difficulty_score']
+            click.echo(f"\n🎯 Hiring Difficulty Score: {score:.2f}")
+        
+        if 'hiring_difficulty_likelihood' in results:
+            likelihood = results['hiring_difficulty_likelihood']
+            click.echo(f"📈 Hiring Difficulty Likelihood: {likelihood:.1%}")
+        
+        if 'key_findings' in results:
+            click.echo(f"\n🔍 Key Findings:")
+            for finding in results['key_findings'][:5]:
+                click.echo(f"  • {finding}")
+        
+        if 'recent_mentions' in results:
+            click.echo(f"\n📅 Recent Mentions: {results['recent_mentions']}")
+        
+        # Save results if requested
+        if output:
+            success = system.export_analysis_report(results, output, format)
+            if success:
+                click.echo(f"\n💾 Results saved to: {output}")
+        
+        system.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error analyzing company hiring difficulties: {e}")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+@click.option('--min-filings',
+              '-m',
+              type=int,
+              default=1,
+              help='Minimum number of filings required for ranking')
+@click.option('--recent-only',
+              '-r',
+              is_flag=True,
+              help='Only consider recent filings')
+@click.option('--years-lookback',
+              '-y',
+              type=int,
+              default=3,
+              help='Number of recent years to consider if --recent-only is used')
+@click.option('--output',
+              '-o',
+              type=click.Path(),
+              help='Output file path for results')
+def hiring_difficulties_rankings(min_filings, recent_only, years_lookback, output):
+    """Rank companies by hiring difficulties"""
+    
+    click.echo("📊 Ranking companies by hiring difficulties")
+    
+    if recent_only:
+        click.echo(f"🕒 Considering only filings from last {years_lookback} years")
+    
+    click.echo(f"📋 Minimum filings required: {min_filings}")
+    
+    try:
+        system = FinancialVectorRAG()
+        
+        # Get rankings
+        rankings = system.rank_companies_by_hiring_difficulties(
+            min_filings=min_filings,
+            recent_years_only=recent_only,
+            years_lookback=years_lookback
+        )
+        
+        if not rankings:
+            click.echo("❌ No rankings available. Run the hiring difficulties pipeline first.")
+            raise click.ClickException("No data available for ranking")
+        
+        # Display top 20 rankings
+        click.echo(f"\n🏆 Top Companies by Hiring Difficulties:")
+        click.echo(f"{'Rank':<4} {'Company':<30} {'Score':<8} {'Likelihood':<12} {'Filings':<8}")
+        click.echo("-" * 70)
+        
+        for i, company in enumerate(rankings[:20], 1):
+            name = company.get('company_name', 'Unknown')[:28]
+            score = company.get('avg_hiring_difficulty_score', 0)
+            likelihood = company.get('avg_hiring_difficulty_likelihood', 0)
+            filings = company.get('filing_count', 0)
+            
+            click.echo(f"{i:<4} {name:<30} {score:<8.2f} {likelihood:<12.1%} {filings:<8}")
+        
+        # Save results if requested
+        if output:
+            export_path = system.export_hiring_difficulties_rankings(
+                rankings=rankings,
+                output_path=output
+            )
+            click.echo(f"\n💾 Full rankings saved to: {export_path}")
+        
+        system.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error generating hiring difficulties rankings: {e}")
+        raise click.ClickException(str(e))
+
+
+@cli.command()
+def hiring_difficulties_stats():
+    """Show hiring difficulties analysis statistics"""
+    
+    click.echo("📊 Hiring Difficulties Analysis Statistics")
+    
+    try:
+        system = FinancialVectorRAG()
+        
+        stats = system.get_hiring_difficulties_summary_stats()
+        
+        if 'error' in stats:
+            click.echo(f"❌ {stats['error']}")
+            raise click.ClickException("Failed to get statistics")
+        
+        # Display statistics
+        click.echo(f"\n📈 Analysis Coverage:")
+        click.echo(f"Total companies analyzed: {stats.get('total_companies', 0)}")
+        click.echo(f"Total filings processed: {stats.get('total_filings', 0)}")
+        click.echo(f"Companies with hiring difficulties: {stats.get('companies_with_difficulties', 0)}")
+        click.echo(f"Significant findings: {stats.get('significant_findings', 0)}")
+        
+        if 'avg_hiring_difficulty_score' in stats:
+            click.echo(f"\n🎯 Average Scores:")
+            click.echo(f"Average hiring difficulty score: {stats['avg_hiring_difficulty_score']:.2f}")
+            click.echo(f"Average hiring difficulty likelihood: {stats['avg_hiring_difficulty_likelihood']:.1%}")
+        
+        if 'top_difficulty_terms' in stats:
+            click.echo(f"\n🔍 Most Common Hiring Difficulty Indicators:")
+            for term, count in stats['top_difficulty_terms'][:10]:
+                click.echo(f"  • {term}: {count} mentions")
+        
+        if 'years_covered' in stats:
+            click.echo(f"\n📅 Years covered: {', '.join(map(str, stats['years_covered']))}")
+        
+        system.close()
+        
+    except Exception as e:
+        click.echo(f"❌ Error getting hiring difficulties statistics: {e}")
         raise click.ClickException(str(e))
 
 

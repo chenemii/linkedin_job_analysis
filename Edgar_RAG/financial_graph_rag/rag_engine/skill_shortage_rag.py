@@ -1,20 +1,24 @@
 """
 Skill Shortage RAG Engine
 
-Specialized RAG engine for analyzing skill shortage and talent gap queries
-in financial documents, extending the existing vector RAG functionality.
+Specialized RAG engine for analyzing skill shortages and talent gaps
+in financial documents with AI-based likelihood scoring.
 """
 
 import logging
-from typing import List, Dict, Optional, Any
+import time
+import random
 import json
+from typing import List, Dict, Optional
+from pathlib import Path
 
-from langchain.schema import Document
 from langchain.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 
-from .vector_rag import VectorRAGEngine
-from ..data_collectors.skill_shortage_analyzer import SkillShortageAnalyzer, SkillShortageAnalysis
+from .vector_rag import VectorRAGEngine, retry_with_backoff, log_llm_request
 from ..config import settings
+from ..data_collectors.skill_shortage_analyzer import SkillShortageAnalyzer, SkillShortageAnalysis
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +187,7 @@ class SkillShortageRAGEngine(VectorRAGEngine):
         # Create analysis query
         query = f"Analyze {analysis_focus} for {company_ticker}"
 
-        # Generate skill shortage specific analysis
+        # Generate skill shortage specific analysis with retry logic
         try:
             messages = self.skill_shortage_analysis_prompt.format_messages(
                 query=query,
@@ -191,7 +195,11 @@ class SkillShortageRAGEngine(VectorRAGEngine):
                 skill_shortage_data=json.dumps(skill_shortage_data, indent=2)
             )
 
-            response = self.llm.invoke(messages)
+            def llm_call():
+                return log_llm_request(self.llm, messages, f"for {company_ticker} skill shortage analysis")
+            
+            # Use retry logic for LLM call
+            response = retry_with_backoff(llm_call, max_retries=3, base_delay=2.0)
             skill_shortage_analysis = response.content
 
             # Prepare source document references
@@ -344,7 +352,7 @@ class SkillShortageRAGEngine(VectorRAGEngine):
                 except:
                     continue
 
-        # Create comparison query
+        # Create comparison query with retry logic
         query = f"Compare and analyze {analysis_focus} across companies"
 
         try:
@@ -354,7 +362,11 @@ class SkillShortageRAGEngine(VectorRAGEngine):
                 document_context=document_context
             )
 
-            response = self.llm.invoke(messages)
+            def llm_call():
+                return log_llm_request(self.llm, messages, f"for comparative skill shortage analysis")
+            
+            # Use retry logic for LLM call
+            response = retry_with_backoff(llm_call, max_retries=3, base_delay=2.0)
             comparative_analysis = response.content
 
             return {
@@ -413,7 +425,7 @@ class SkillShortageRAGEngine(VectorRAGEngine):
         }
 
     def _get_company_skill_shortage_data(self, company_ticker: str) -> Dict:
-        """Get skill shortage data for a specific company"""
+        """Get skill shortage data for a specific company including AI likelihood scores"""
         # Try to load from cache first
         if not hasattr(self.skill_shortage_analyzer, 'results') or not self.skill_shortage_analyzer.results:
             self.skill_shortage_analyzer.load_cache()
@@ -429,28 +441,40 @@ class SkillShortageRAGEngine(VectorRAGEngine):
 
         # Aggregate data
         total_mentions = sum(r.skill_shortage_mentions for r in company_results)
-        avg_score = sum(r.skill_shortage_score for r in company_results) / len(company_results)
+        avg_keyword_score = sum(r.skill_shortage_score for r in company_results) / len(company_results)
+        avg_likelihood_score = sum(r.skill_shortage_likelihood for r in company_results) / len(company_results)
         years_with_data = sorted(list(set(r.year for r in company_results if r.year)))
+        
+        # Get the most recent summary
+        recent_summary = ""
+        if company_results:
+            recent_result = max(company_results, key=lambda x: x.year if x.year else 0)
+            recent_summary = recent_result.skill_shortage_summary
 
         return {
             "company_ticker": company_ticker,
             "total_mentions": total_mentions,
-            "average_score": avg_score,
+            "average_keyword_score": avg_keyword_score,
+            "average_likelihood_score": avg_likelihood_score,
+            "recent_summary": recent_summary,
             "filings_analyzed": len(company_results),
             "years_with_data": years_with_data,
             "filings_with_mentions": len([r for r in company_results if r.skill_shortage_mentions > 0]),
+            "filings_with_high_likelihood": len([r for r in company_results if r.skill_shortage_likelihood > 6.0]),
             "detailed_results": [
                 {
                     "year": r.year,
                     "mentions": r.skill_shortage_mentions,
-                    "score": r.skill_shortage_score,
+                    "keyword_score": r.skill_shortage_score,
+                    "likelihood_score": r.skill_shortage_likelihood,
+                    "summary": r.skill_shortage_summary,
                     "filing_url": r.filing_url
                 } for r in company_results
             ]
         }
 
     def _get_all_skill_shortage_data(self, sector: str = None) -> Dict:
-        """Get skill shortage data for all companies"""
+        """Get skill shortage data for all companies including AI likelihood scores"""
         if not hasattr(self.skill_shortage_analyzer, 'results') or not self.skill_shortage_analyzer.results:
             self.skill_shortage_analyzer.load_cache()
 
@@ -469,18 +493,23 @@ class SkillShortageRAGEngine(VectorRAGEngine):
         aggregated_data = {}
         for ticker, results in company_data.items():
             total_mentions = sum(r.skill_shortage_mentions for r in results)
-            if total_mentions > 0:  # Only include companies with mentions
+            avg_likelihood = sum(r.skill_shortage_likelihood for r in results) / len(results)
+            
+            # Include companies with either keyword mentions OR high likelihood scores
+            if total_mentions > 0 or avg_likelihood > 5.0:
                 aggregated_data[ticker] = {
                     "total_mentions": total_mentions,
-                    "average_score": sum(r.skill_shortage_score for r in results) / len(results),
+                    "average_keyword_score": sum(r.skill_shortage_score for r in results) / len(results),
+                    "average_likelihood_score": avg_likelihood,
                     "filings_count": len(results),
+                    "filings_with_high_likelihood": len([r for r in results if r.skill_shortage_likelihood > 6.0]),
                     "years_covered": sorted(list(set(r.year for r in results if r.year)))
                 }
 
         return aggregated_data
 
     def _calculate_skill_shortage_trends(self, results: List[SkillShortageAnalysis]) -> Dict:
-        """Calculate trend statistics from skill shortage results"""
+        """Calculate trend statistics from skill shortage results including AI likelihood scores"""
         # Group by year
         year_data = {}
         for result in results:
@@ -489,25 +518,34 @@ class SkillShortageRAGEngine(VectorRAGEngine):
             if result.year not in year_data:
                 year_data[result.year] = {
                     "total_mentions": 0,
+                    "total_likelihood_score": 0,
                     "filings_count": 0,
                     "companies": set(),
-                    "filings_with_mentions": 0
+                    "filings_with_mentions": 0,
+                    "filings_with_high_likelihood": 0
                 }
             
             year_data[result.year]["total_mentions"] += result.skill_shortage_mentions
+            year_data[result.year]["total_likelihood_score"] += result.skill_shortage_likelihood
             year_data[result.year]["filings_count"] += 1
             year_data[result.year]["companies"].add(result.cik)
+            
             if result.skill_shortage_mentions > 0:
                 year_data[result.year]["filings_with_mentions"] += 1
+            
+            if result.skill_shortage_likelihood > 6.0:
+                year_data[result.year]["filings_with_high_likelihood"] += 1
 
         # Calculate trend metrics
         trend_metrics = {}
         for year, data in year_data.items():
             trend_metrics[year] = {
                 "total_mentions": data["total_mentions"],
+                "avg_likelihood_score": data["total_likelihood_score"] / data["filings_count"] if data["filings_count"] > 0 else 0,
                 "filings_analyzed": data["filings_count"],
                 "companies_count": len(data["companies"]),
                 "mention_rate": data["filings_with_mentions"] / data["filings_count"] if data["filings_count"] > 0 else 0,
+                "high_likelihood_rate": data["filings_with_high_likelihood"] / data["filings_count"] if data["filings_count"] > 0 else 0,
                 "avg_mentions_per_filing": data["total_mentions"] / data["filings_count"] if data["filings_count"] > 0 else 0
             }
 
@@ -517,6 +555,7 @@ class SkillShortageRAGEngine(VectorRAGEngine):
                 "total_years": len(year_data),
                 "total_filings": sum(data["filings_count"] for data in year_data.values()),
                 "total_mentions": sum(data["total_mentions"] for data in year_data.values()),
+                "avg_likelihood_score": sum(data["total_likelihood_score"] for data in year_data.values()) / sum(data["filings_count"] for data in year_data.values()) if sum(data["filings_count"] for data in year_data.values()) > 0 else 0,
                 "unique_companies": len(set().union(*[data["companies"] for data in year_data.values()]))
             }
         }
@@ -532,16 +571,20 @@ class SkillShortageRAGEngine(VectorRAGEngine):
         logger.info(f"Adding {len(skill_shortage_results)} skill shortage analyses to vector store")
 
         for result in skill_shortage_results:
-            if result.skill_shortage_mentions > 0:  # Only add results with mentions
+            # Include results with either keyword mentions OR high likelihood scores
+            if result.skill_shortage_mentions > 0 or result.skill_shortage_likelihood > 5.0:
                 # Create document text summarizing the skill shortage findings
                 doc_text = f"""
                 Skill Shortage Analysis for {result.company_name} ({result.ticker}) - {result.year}
                 
-                Skill shortage mentions: {result.skill_shortage_mentions}
-                Skill shortage score: {result.skill_shortage_score:.4f}
+                AI Likelihood Score: {result.skill_shortage_likelihood:.1f}/10
+                Keyword Mentions: {result.skill_shortage_mentions}
+                Keyword Score: {result.skill_shortage_score:.4f}
                 
-                This filing contains {result.skill_shortage_mentions} mentions of skill shortage related terms,
-                indicating workforce challenges and talent gaps affecting the company's operations.
+                AI Summary: {result.skill_shortage_summary}
+                
+                This filing shows a {result.skill_shortage_likelihood:.1f}/10 likelihood of skill shortages based on AI analysis
+                of language patterns and business context, with {result.skill_shortage_mentions} explicit keyword mentions.
                 
                 Filing URL: {result.filing_url}
                 Analysis Date: {result.analyzed_date}
@@ -558,6 +601,8 @@ class SkillShortageRAGEngine(VectorRAGEngine):
                             'document_type': 'skill_shortage_analysis',
                             'skill_shortage_mentions': result.skill_shortage_mentions,
                             'skill_shortage_score': result.skill_shortage_score,
+                            'skill_shortage_likelihood': result.skill_shortage_likelihood,
+                            'skill_shortage_summary': result.skill_shortage_summary,
                             'year': result.year,
                             'cik': result.cik,
                             'analysis_date': result.analyzed_date
@@ -566,4 +611,52 @@ class SkillShortageRAGEngine(VectorRAGEngine):
                 except Exception as e:
                     logger.error(f"Error adding skill shortage analysis to vector store: {e}")
 
-        logger.info("Completed adding skill shortage analyses to vector store") 
+        logger.info("Completed adding skill shortage analyses to vector store")
+
+def log_llm_request(llm, messages, context=""):
+    """
+    Wrapper function to log LLM requests with full URL for debugging
+    """
+    # Try multiple ways to get the base URL
+    base_url = None
+    model_name = getattr(llm, 'model_name', 'unknown')
+    
+    # Method 1: Check if it's a ChatOpenAI instance with client
+    if hasattr(llm, 'client') and hasattr(llm.client, 'base_url'):
+        base_url = str(llm.client.base_url)
+    
+    # Method 2: Check for openai_api_base attribute
+    elif hasattr(llm, 'openai_api_base'):
+        base_url = str(llm.openai_api_base)
+    
+    # Method 3: Check for base_url attribute directly
+    elif hasattr(llm, 'base_url'):
+        base_url = str(llm.base_url)
+    
+    # Method 4: Check client._base_url (newer OpenAI client versions)
+    elif hasattr(llm, 'client') and hasattr(llm.client, '_base_url'):
+        base_url = str(llm.client._base_url)
+    
+    # Method 5: Check for default OpenAI endpoint
+    elif 'openai' in str(type(llm)).lower():
+        # Default OpenAI endpoint
+        base_url = "https://api.openai.com/v1"
+    
+    if base_url:
+        # Ensure the URL ends with the chat completions endpoint
+        if not base_url.endswith('/chat/completions'):
+            if base_url.endswith('/v1'):
+                full_url = f"{base_url}/chat/completions"
+            else:
+                full_url = f"{base_url}/v1/chat/completions"
+        else:
+            full_url = base_url
+            
+        logger.info(f"Making LLM request {context} to: {full_url}")
+        logger.info(f"Model: {model_name}")
+    else:
+        logger.info(f"Making LLM request {context} (URL detection failed)")
+        logger.info(f"Model: {model_name}")
+        logger.info(f"LLM type: {type(llm)}")
+    
+    return llm.invoke(messages) 
