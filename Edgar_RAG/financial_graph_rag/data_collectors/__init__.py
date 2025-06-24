@@ -7,7 +7,7 @@ Contains collectors for S&P 500 company data, EDGAR filings, skill shortage anal
 from .sp500_collector import SP500Collector, SP500Company
 from .edgar_collector import EdgarFilingCollector, EdgarFiling
 from .skill_shortage_analyzer import SkillShortageAnalyzer, SkillShortageAnalysis
-from .hiring_difficulties_analyzer import HiringDifficultiesAnalyzer, HiringDifficultiesAnalysis
+from .hiring_difficulties_analyzer import HiringDifficultiesAnalyzer, HiringDifficultySummary
 
 __all__ = [
     "SP500Collector",
@@ -17,5 +17,5 @@ __all__ = [
     "SkillShortageAnalyzer",
     "SkillShortageAnalysis",
     "HiringDifficultiesAnalyzer",
-    "HiringDifficultiesAnalysis"
+    "HiringDifficultySummary"
 ] 

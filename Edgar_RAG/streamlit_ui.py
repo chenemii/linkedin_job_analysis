@@ -19,6 +19,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from streamlit_option_menu import option_menu
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode
+from pathlib import Path
 
 # Import the Financial Vector RAG system
 from financial_graph_rag.core import FinancialVectorRAG
@@ -2678,130 +2679,73 @@ The similarity score combines multiple factors to identify companies with the hi
 
 # Hiring Difficulties Analysis Functions
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes (shorter since this can change)
+@st.cache_data(ttl=60) # Cache for 1 minute
 def check_hiring_difficulties_analysis_availability():
-    """Check if hiring difficulties analysis data is available"""
+    """Check if hiring difficulties analysis data is available by checking for the output file."""
     try:
-        system = initialize_system()
-        if system and hasattr(system, 'hiring_difficulties_analyzer') and system.hiring_difficulties_analyzer:
-            # Try to load cached results
-            if not system.hiring_difficulties_analyzer.results:
-                system.hiring_difficulties_analyzer.load_cache()
-            
-            if system.hiring_difficulties_analyzer.results:
-                return {
-                    'available': True,
-                    'total_companies': len(set(r.cik for r in system.hiring_difficulties_analyzer.results)),
-                    'total_filings': len(system.hiring_difficulties_analyzer.results),
-                    'years_covered': sorted(set(r.filing_year for r in system.hiring_difficulties_analyzer.results if r.filing_year)),
-                    'last_updated': system.hiring_difficulties_analyzer.cache_file.stat().st_mtime if system.hiring_difficulties_analyzer.cache_file.exists() else None
-                }
-            else:
-                return {
-                    'available': False,
-                    'reason': 'No analysis results found',
-                    'suggestion': 'Run hiring difficulties analysis pipeline first'
-                }
+        output_file = Path(settings.data_directory) / "hiring_difficulties_summary.csv"
+        if output_file.exists():
+            df = pd.read_csv(output_file)
+            return {
+                'available': True,
+                'total_companies': df['cik'].nunique(),
+                'total_filings': len(df),
+                'source': 'CSV file',
+                'last_updated': datetime.fromtimestamp(output_file.stat().st_mtime)
+            }
         else:
             return {
                 'available': False,
-                'reason': 'Hiring difficulties analyzer not initialized',
-                'suggestion': 'Check system configuration'
+                'reason': 'No analysis results file found',
+                'suggestion': 'Run the analysis pipeline in the "Run Full Pipeline" tab.'
             }
     except Exception as e:
         logger.error(f"Error checking hiring difficulties analysis availability: {e}")
         return {
             'available': False,
-            'reason': f'Error: {str(e)}',
-            'suggestion': 'Check system logs for details'
+            'reason': f'Error reading cache file: {str(e)}',
+            'suggestion': 'Check system logs for details.'
         }
 
 
 def display_hiring_difficulties_analysis():
     """Display hiring difficulties analysis page"""
     st.markdown('<h1 class="main-header">🔍 Hiring Difficulties Analysis</h1>', unsafe_allow_html=True)
-    st.markdown("Analyze company SEC filings for hiring difficulties using AI-powered vector similarity search.")
+    st.markdown("Analyze company SEC filings for hiring difficulties using AI-powered summarization.")
 
-    tab1, tab2 = st.tabs(["Company Analysis", "Company Rankings"])
+    tab1, tab2 = st.tabs(["Company Analysis", "Run Full Pipeline"])
 
     with tab1:
         display_company_hiring_analysis()
 
     with tab2:
-        display_company_hiring_rankings()
+        display_hiring_pipeline_analysis()
 
 
-# Cache expensive operations with longer TTL
 @st.cache_data(ttl=1800)  # Cache for 30 minutes
-def run_hiring_analysis(company_ticker, focus_area, years):
-    """Run hiring difficulties analysis with caching"""
+def run_hiring_analysis(company_ticker: str, years: List[int]):
+    """Run hiring difficulties analysis for a single company."""
     system = initialize_system()
     if system:
         try:
-            results = system.analyze_company_hiring_difficulties(
+            # This method is assumed to be in FinancialVectorRAG, calling the new analyzer
+            # It should fetch filings for the company and pass them to the analyzer.
+            results = system.analyze_filings_for_hiring_difficulties(
                 company_ticker=company_ticker,
-                analysis_focus=focus_area if focus_area else "comprehensive hiring difficulties analysis",
                 years=years
             )
             return results
+        except AttributeError:
+             return {'error': 'The method to analyze single-company hiring difficulties is not implemented in the backend.'}
         except Exception as e:
             return {'error': str(e)}
     else:
         return {'error': 'System not available'}
 
 
-@st.cache_data(ttl=1800)  # Cache for 30 minutes
-def run_hiring_rankings_analysis(min_filings, recent_years_only, years_lookback):
-    """Run company hiring difficulties rankings with caching"""
-    system = initialize_system()
-    if system and hasattr(system, 'hiring_difficulties_analyzer') and system.hiring_difficulties_analyzer:
-        try:
-            # First, try to load cached analysis results
-            if not system.hiring_difficulties_analyzer.results:
-                logger.info("No hiring difficulties analysis results in memory, attempting to load from cache")
-                if not system.hiring_difficulties_analyzer.load_cache():
-                    # If no cached results, we need to run the analysis pipeline
-                    logger.info("No cached results found, need to run hiring difficulties analysis pipeline first")
-                    return {
-                        'error': 'No hiring difficulties analysis results available. Please run the hiring difficulties analysis pipeline first.',
-                        'suggestion': 'Go to the "Pipeline Analysis" section to run the complete analysis pipeline.'
-                    }
-                else:
-                    logger.info(f"Loaded {len(system.hiring_difficulties_analyzer.results)} cached analysis results")
-            
-            # Check if we have sufficient results after loading
-            if not system.hiring_difficulties_analyzer.results or len(system.hiring_difficulties_analyzer.results) == 0:
-                return {
-                    'error': 'No hiring difficulties analysis results available after loading cache.',
-                    'suggestion': 'Please run the hiring difficulties analysis pipeline first using the "Pipeline Analysis" section.'
-                }
-            
-            logger.info(f"Running company rankings with {len(system.hiring_difficulties_analyzer.results)} analysis results")
-            
-            rankings = system.rank_companies_by_hiring_difficulties(
-                min_filings=min_filings,
-                recent_years_only=recent_years_only,
-                years_lookback=years_lookback
-            )
-            
-            if not rankings:
-                return {
-                    'error': 'No companies meet the specified criteria for ranking.',
-                    'suggestion': 'Try reducing the minimum filings requirement or changing the time period filters.'
-                }
-            
-            return {'rankings': rankings, 'total_companies': len(rankings)}
-            
-        except Exception as e:
-            logger.error(f"Error in hiring difficulties rankings analysis: {e}")
-            return {'error': f'Analysis failed: {str(e)}'}
-    else:
-        return {'error': 'Hiring difficulties analyzer not available. Please check system initialization.'}
-
-
 def display_company_hiring_analysis():
     """Display company-specific hiring difficulties analysis"""
-    st.subheader("🏢 Company Hiring Difficulties Analysis")
+    st.subheader("🏢 Single Company Analysis")
     
     col1, col2 = st.columns([2, 1])
     
@@ -2809,164 +2753,106 @@ def display_company_hiring_analysis():
         # Company selection
         companies = get_available_companies()
         if not companies:
-            st.warning("No companies available. Please run the setup first.")
+            st.warning("No companies available. Please run the data setup first.")
             return
             
         company_options = [f"{c['company_ticker']} - {c['company_name']}" for c in companies]
-        selected_company = st.selectbox("Select Company", company_options)
+        selected_company = st.selectbox("Select Company", company_options, key="hiring_company_select")
         company_ticker = selected_company.split(" - ")[0] if selected_company else None
         
-        # Focus area
-        focus_area = st.text_input("Focus Area (optional)", 
-                                 placeholder="e.g., technical skills shortage, labor market challenges")
-    
     with col2:
         # Analysis options
         st.markdown("**Analysis Options**")
         years = st.multiselect(
-            "Select Years",
+            "Select Years to Analyze",
             list(range(2020, datetime.now().year + 1)),
-            default=[datetime.now().year - 2, datetime.now().year - 1]
+            default=[datetime.now().year - 1, datetime.now().year],
+            key="hiring_years_select"
         )
-        st.info("Analysis focuses on hiring difficulties and challenges in obtaining workers with desired skills.")
         
-    if st.button("🔍 Analyze Company Hiring Difficulties", type="primary"):
-        if company_ticker:
-            if not years:
-                st.error("Please select at least one year to analyze.")
-                return
-
-            # Show progress with detailed steps
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            try:
-                # Step 1: Initialize system (usually cached)
-                status_text.text("🔄 Initializing system...")
-                progress_bar.progress(10)
+    if st.button("🔍 Analyze Company", type="primary"):
+        if company_ticker and years:
+            with st.spinner(f"Analyzing {company_ticker} for years {years}..."):
+                # I'm assuming analyze_filings_for_hiring_difficulties exists on the system object.
+                # It should return a list of dicts.
+                results = run_hiring_analysis(company_ticker, years)
                 
-                # Step 2: Run analysis (cached)
-                status_text.text("🔍 Analyzing hiring difficulties...")
-                progress_bar.progress(30)
-                
-                results = run_hiring_analysis(company_ticker, focus_area, years)
-                
-                progress_bar.progress(80)
-                status_text.text("📊 Processing results...")
-                
-                if 'error' not in results:
-                    progress_bar.progress(100)
-                    status_text.text("✅ Analysis completed!")
-                    
-                    # Clear progress indicators
-                    progress_bar.empty()
-                    status_text.empty()
-                    
-                    display_company_hiring_results(results, company_ticker)
-                else:
-                    progress_bar.empty()
-                    status_text.empty()
+                if isinstance(results, dict) and 'error' in results:
                     st.error(f"Analysis failed: {results['error']}")
-                    if 'suggestion' in results:
-                        st.info(results['suggestion'])
-                    
-            except Exception as e:
-                progress_bar.empty()
-                status_text.empty()
-                st.error(f"Error during analysis: {e}")
+                else:
+                    display_company_hiring_results(results, company_ticker)
         else:
-            st.warning("Please select a company to analyze.")
+            st.warning("Please select a company and at least one year to analyze.")
 
 
-def display_company_hiring_results(results: Dict, company_ticker: str):
-    """Display company hiring difficulties analysis results"""
+def display_company_hiring_results(results: List[Dict], company_ticker: str):
+    """Display company hiring difficulties analysis results."""
     st.success(f"✅ Analysis completed for {company_ticker}")
 
-    # Key metrics
-    col1, col2, col3, col4 = st.columns(4)
+    if not results:
+        st.warning("No analysis results found for the selected criteria.")
+        return
 
+    # Overall metrics
+    mentioned_count = sum(1 for r in results if r.get("is_mentioned"))
+    error_count = sum(1 for r in results if r.get("error"))
+
+    col1, col2, col3 = st.columns(3)
     with col1:
-        score = results.get('average_similarity_score', 0)
-        st.metric("Avg. Vector Similarity", f"{score:.3f}")
-
+        st.metric("Filings Analyzed", len(results))
     with col2:
-        likelihood = results.get('average_likelihood_score', 0)
-        st.metric("Avg. AI Likelihood", f"{likelihood:.1f}/10")
-
+        st.metric("Filings with Mentions", mentioned_count)
     with col3:
-        filings = results.get('filings_count', 0)
-        st.metric("Filings Analyzed", filings)
+        st.metric("Analysis Errors", error_count)
 
-    with col4:
-        high_likelihood = results.get('high_likelihood_filings', 0)
-        st.metric("High Likelihood Filings", high_likelihood)
+    # Display each summary, sorted by year
+    sorted_results = sorted(results, key=lambda r: r.get('year', 0), reverse=True)
 
-    # Risk level based on AI likelihood score
-    likelihood_score = results.get('average_likelihood_score', 0)
-    if likelihood_score >= 7:
-        risk_level = "High"
-        risk_color = "🔴"
-    elif likelihood_score >= 5:
-        risk_level = "Medium"
-        risk_color = "🟡"
-    elif likelihood_score >= 3:
-        risk_level = "Low"
-        risk_color = "🟢"
-    else:
-        risk_level = "Very Low"
-        risk_color = "🟢"
-    
-    st.markdown(f"**Overall Risk Level:** {risk_color} {risk_level}")
-
-
-    # Display AI-generated summary if available
-    if results.get('recent_summary'):
-        st.subheader("🤖 AI-Generated Summary")
-        st.markdown(f"""<div class="skill-shortage-result" style="background-color: #e9f5ff; border-left-color: #1f77b4;">
-        {results["recent_summary"]}
-        </div>""", unsafe_allow_html=True)
-
-    # Company information
-    if 'company_info' in results:
-        with st.expander("🏢 Company Information"):
-            info = results['company_info']
-            col1, col2, col3 = st.columns(3)
+    for result in sorted_results:
+        expander_title = f"📄 {result.get('year', 'N/A')} Filing for {result.get('ticker', 'N/A')}"
+        with st.expander(expander_title, expanded=result.get("is_mentioned", False)):
+            if result.get("error"):
+                st.error(f"Analysis failed: {result['error']}")
+            elif result.get("is_mentioned"):
+                st.markdown('<div class="skill-shortage-result" style="background-color: #fff3cd; border-left-color: #ffc107;">', unsafe_allow_html=True)
+                st.markdown(result.get("summary", "No summary available."))
+                st.markdown('</div>', unsafe_allow_html=True)
+            else:
+                st.info("ℹ️ No significant hiring difficulties mentioned.")
+                if result.get("summary"):
+                    st.markdown(f'<div class="document-content">{result.get("summary")}</div>', unsafe_allow_html=True)
             
-            with col1:
-                st.write(f"**Company:** {info.get('name', 'Unknown')}")
-                st.write(f"**Ticker:** {info.get('ticker', 'N/A')}")
-            
-            with col2:
-                st.write(f"**Sector:** {info.get('sector', 'Unknown')}")
-                st.write(f"**CIK:** {info.get('cik', 'N/A')}")
-            
-            with col3:
-                st.write(f"**Headquarters:** {info.get('headquarters', 'Unknown')}")
+            st.caption(f"CIK: {result.get('cik')} | Filing URL: [Link]({result.get('filing_url')})")
 
 
-def display_company_hiring_rankings():
-    """Display company hiring difficulties rankings"""
-    st.subheader("🏆 Company Hiring Difficulties Rankings")
-
+def display_hiring_pipeline_analysis():
+    """Display hiring difficulties pipeline analysis"""
+    st.subheader("🚀 Run Full Analysis Pipeline")
     st.markdown("""
-    Rank companies by their hiring difficulty levels. The ranking uses a vector similarity-based scoring 
-    system that combines AI likelihood scores with vector similarity from SEC filings.
+    Run the complete analysis pipeline to process SEC filings for multiple companies and years.
+    This will generate a summary CSV file with the results, which can be used for further analysis.
+    This process can take a significant amount of time depending on the number of filings.
     """)
-    
-    # Check if analysis data is available
-    analysis_status = check_hiring_difficulties_analysis_availability()
-    
-    if not analysis_status.get('available', False):
-        st.warning("⚠️ No hiring difficulties analysis data available")
-        st.info(f"**Reason:** {analysis_status.get('reason', 'Unknown')}")
-        st.info("To generate rankings, you must first run the analysis pipeline to process company filings.")
 
-        st.markdown("### Run Analysis Pipeline")
+    # Check for existing data
+    analysis_status = check_hiring_difficulties_analysis_availability()
+    if analysis_status.get('available'):
+        st.success("✅ Analysis data file found.")
+        with st.expander("Data File Details"):
+            st.metric("Total Companies", analysis_status.get('total_companies', 'N/A'))
+            st.metric("Total Filings", analysis_status.get('total_filings', 'N/A'))
+            if analysis_status.get('last_updated'):
+                st.metric("Last Updated", analysis_status['last_updated'].strftime("%Y-%m-%d %H:%M:%S"))
+    else:
+        st.warning("⚠️ No analysis data file found. Run the pipeline to generate it.")
+
+    with st.form("pipeline_run_form"):
+        st.markdown("**Pipeline Configuration**")
         col1, col2 = st.columns(2)
         with col1:
             years = st.multiselect(
                 "Select Years to Analyze",
-                options=[2020, 2021, 2022, 2023, 2024],
+                options=list(range(2020, datetime.now().year + 1)),
                 default=[2022, 2023]
             )
         with col2:
@@ -2977,361 +2863,59 @@ def display_company_hiring_rankings():
                 value=None,
                 placeholder="All S&P 500"
             )
-        save_results = True
 
-        if st.button("🚀 Run Analysis Pipeline", type="primary"):
+        submitted = st.form_submit_button("🚀 Run Analysis Pipeline", type="primary")
+
+        if submitted:
             if not years:
-                st.error("Please select at least one year to analyze")
-                return
-            
-            with st.spinner("Running hiring difficulties analysis pipeline... This may take several minutes."):
-                system = initialize_system()
-                if system:
-                    results = system.run_hiring_difficulties_analysis_pipeline(
-                        years=years,
-                        limit_companies=limit_companies,
-                        save_results=save_results
-                    )
-                    
-                    if 'errors' in results and results['errors']:
-                        st.error(f"Pipeline run failed: {results['errors'][0]}")
-                    else:
-                        st.success("Pipeline completed! You can now view company analysis and rankings.")
-                        # Clear cache for rankings and rerun
-                        st.cache_data.clear()
-                        st.rerun()
-                else:
-                    st.error("Failed to initialize system.")
-
-        if st.button("🔄 Check Again"):
-            st.rerun()
-        return
-    
-    # Display data availability info
-    with st.expander("📊 Data Availability", expanded=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Companies Analyzed", analysis_status.get('total_companies', 0))
-        with col2:
-            st.metric("Total Filings", analysis_status.get('total_filings', 0))
-        with col3:
-            years = analysis_status.get('years_covered', [])
-            years_str = f"{min(years)}-{max(years)}" if years else "N/A"
-            st.metric("Years Covered", years_str)
-    
-    # Ranking parameters
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        min_filings = st.slider("Minimum Filings Required", 1, 10, 1, 
-                               help="Companies must have at least this many filings to be included")
-        
-        recent_years_only = st.checkbox("Recent Years Only", value=True,
-                                       help="Only consider filings from recent years")
-    
-    with col2:
-        years_lookback = st.slider("Years Lookback", 1, 10, 3,
-                                  help="Number of recent years to consider (if Recent Years Only is enabled)")
-        
-        max_display = st.slider("Max Companies to Display", 10, 100, 20,
-                               help="Maximum number of companies to show in results")
-    
-    
-    if st.button("📊 Generate Rankings", type="primary"):
-        # Show progress
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            status_text.text("🔄 Loading analysis data...")
-            progress_bar.progress(20)
-            
-            status_text.text("📊 Computing rankings...")
-            progress_bar.progress(50)
-            
-            results = run_hiring_rankings_analysis(min_filings, recent_years_only, years_lookback)
-            
-            progress_bar.progress(90)
-            status_text.text("✅ Rankings completed!")
-            
-            if 'error' not in results:
-                progress_bar.progress(100)
-                
-                # Clear progress indicators
-                progress_bar.empty()
-                status_text.empty()
-                
-                display_hiring_rankings_results(results['rankings'], True, max_display, results['total_companies'])
-                
+                st.error("Please select at least one year to analyze.")
             else:
-                progress_bar.empty()
-                status_text.empty()
-                st.error(f"Rankings failed: {results['error']}")
-                if 'suggestion' in results:
-                    st.info(results['suggestion'])
-                
-        except Exception as e:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"Error generating rankings: {e}")
-
-
-def display_hiring_rankings_results(rankings, show_summaries, max_display, total_companies):
-    """Display hiring difficulties rankings results"""
-    st.success(f"✅ Rankings generated for {total_companies} companies")
-    
-    # Summary metrics
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Total Companies", total_companies)
-    
-    with col2:
-        avg_score = sum(c.get('similarity_score', 0) for c in rankings[:max_display]) / min(len(rankings), max_display)
-        st.metric("Avg Ranking Score", f"{avg_score:.2f}")
-    
-    with col3:
-        avg_likelihood = sum(c.get('avg_likelihood_score', 0) for c in rankings[:max_display]) / min(len(rankings), max_display)
-        st.metric("Avg AI Likelihood", f"{avg_likelihood:.1f}/10")
-    
-    with col4:
-        total_filings = sum(c.get('filings_analyzed', 0) for c in rankings[:max_display])
-        st.metric("Total Filings Shown", total_filings)
-    
-    # Rankings table
-    st.subheader(f"🏆 Top {min(max_display, len(rankings))} Companies by Hiring Difficulties")
-    
-    # Create DataFrame for display
-    display_data = []
-    for i, company in enumerate(rankings[:max_display], 1):
-        display_data.append({
-            'Rank': i,
-            'Company': company.get('company_name', 'Unknown'),
-            'Ticker': company.get('ticker', 'N/A'),
-            'Ranking Score': f"{company.get('similarity_score', 0):.2f}",
-            'Avg AI Likelihood': f"{company.get('avg_likelihood_score', 0):.1f}/10",
-            'Avg Vector Similarity': f"{company.get('avg_similarity_score', 0):.3f}",
-            'Filings': company.get('filings_analyzed', 0),
-        })
-    
-    df = pd.DataFrame(display_data)
-    
-    # Configure AgGrid
-    gb = GridOptionsBuilder.from_dataframe(df)
-    gb.configure_pagination(paginationAutoPageSize=True)
-    gb.configure_selection('single', use_checkbox=True, pre_selected_rows=[0])
-    gb.configure_default_column(groupable=True, value=True, enableRowGroup=True, editable=False)
-    
-    # Highlight score column
-    gb.configure_column("Ranking Score", cellStyle={'backgroundColor': '#e9f5ff'})
-    
-    grid_options = gb.build()
-    
-    grid_response = AgGrid(
-        df,
-        gridOptions=grid_options,
-        data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-        update_mode=GridUpdateMode.SELECTION_CHANGED,
-        fit_columns_on_grid_load=True,
-        theme='streamlit',
-        height=400
-    )
-    
-    # Detailed company information
-    if grid_response['selected_rows']:
-        selected_rank = int(grid_response['selected_rows'][0]['Rank'])
-        selected_company_data = rankings[selected_rank - 1]
-        display_selected_company_hiring_details(selected_company_data)
-
-    # Export functionality
-    if st.button("📥 Export Rankings"):
-        system = initialize_system()
-        try:
-            export_path = system.export_hiring_difficulties_rankings(rankings=rankings)
-            with open(export_path, "rb") as fp:
-                st.download_button(
-                    label="Download CSV",
-                    data=fp,
-                    file_name=os.path.basename(export_path),
-                    mime="text/csv"
-                )
-            st.success(f"Rankings exported to: {export_path}")
-        except Exception as e:
-            st.error(f"Failed to export rankings: {e}")
-
-
-def display_selected_company_hiring_details(company):
-    """Display detailed information for a selected company from rankings"""
-    st.subheader(f"🏢 Detailed Analysis: {company['ticker']} - {company['company_name']}")
-    
-    # Basic information
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.metric("Overall Rank", f"#{company.get('rank', 'N/A')}")
-    with col2:
-        st.metric("Ranking Score", f"{company.get('similarity_score', 0):.2f}")
-    with col3:
-        st.metric("Avg AI Likelihood", f"{company.get('avg_likelihood_score', 0):.1f}/10")
-    with col4:
-        st.metric("Filings Analyzed", f"{company.get('filings_analyzed', 0)}")
-    
-    
-    # AI Summary
-    if company.get('recent_summary'):
-        st.subheader("🤖 AI Summary")
-        st.markdown(f"""<div class="skill-shortage-result" style="background-color: #e9f5ff; border-left-color: #1f77b4;">
-        {company['recent_summary']}
-        </div>""", unsafe_allow_html=True)
-
-
-def display_hiring_pipeline_analysis():
-    """Display hiring difficulties pipeline analysis"""
-    st.subheader("🚀 Hiring Difficulties Pipeline Analysis")
-    
-    st.info("Run the complete hiring difficulties analysis pipeline to analyze 10-K filings for hiring challenges and recruitment difficulties.")
-    
-    # Pipeline parameters
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        years = st.multiselect("Years to Analyze", 
-                              options=[2020, 2021, 2022, 2023, 2024],
-                              default=[2022, 2023])
-        
-        limit_companies = st.number_input("Limit Companies (optional)", 
-                                        min_value=1, max_value=500, 
-                                        value=None, placeholder="All companies")
-    
-    with col2:
-        save_results = st.checkbox("Save Results", value=True)
-        
-        st.info("💡 **Pipeline Steps:**\n"
-                "1. Load S&P 500 companies\n"
-                "2. Download/load 10-K filings\n"
-                "3. Analyze for hiring difficulties\n"
-                "4. Generate rankings and summaries")
-    
-    # Check current system status
-    with st.expander("📊 Current System Status", expanded=False):
-        analysis_status = check_hiring_difficulties_analysis_availability()
-        
-        if analysis_status.get('available'):
-            st.success("✅ Previous analysis data available")
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Companies", analysis_status.get('total_companies', 0))
-            with col2:
-                st.metric("Filings", analysis_status.get('total_filings', 0))
-            with col3:
-                years_covered = analysis_status.get('years_covered', [])
-                years_str = f"{min(years_covered)}-{max(years_covered)}" if years_covered else "N/A"
-                st.metric("Years", years_str)
-        else:
-            st.warning("⚠️ No previous analysis data found")
-            st.write(f"**Reason:** {analysis_status.get('reason', 'Unknown')}")
-    
-    if st.button("🚀 Run Pipeline Analysis", type="primary"):
-        if not years:
-            st.error("Please select at least one year to analyze")
-            return
-        
-        # Show detailed progress
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        try:
-            status_text.text("🔄 Initializing system...")
-            progress_bar.progress(5)
-            
-            system = initialize_system()
-            if not system:
-                st.error("Failed to initialize system")
-                return
-            
-            status_text.text("🏢 Loading companies...")
-            progress_bar.progress(15)
-            
-            status_text.text("📄 Processing filings...")
-            progress_bar.progress(30)
-            
-            # Run the pipeline
-            results = system.run_hiring_difficulties_analysis_pipeline(
-                years=years,
-                limit_companies=limit_companies,
-                save_results=save_results
-            )
-            
-            progress_bar.progress(80)
-            status_text.text("📊 Finalizing results...")
-            
-            progress_bar.progress(100)
-            status_text.text("✅ Pipeline completed!")
-            
-            # Clear progress indicators
-            progress_bar.empty()
-            status_text.empty()
-            
-            display_hiring_pipeline_results(results)
-            
-        except Exception as e:
-            progress_bar.empty()
-            status_text.empty()
-            st.error(f"Pipeline failed: {e}")
+                with st.spinner("Running hiring difficulties analysis pipeline... This may take several minutes."):
+                    system = initialize_system()
+                    if system:
+                        try:
+                            # This method is assumed to be in FinancialVectorRAG
+                            results = system.run_hiring_difficulties_analysis_pipeline(
+                                years=years,
+                                limit_companies=limit_companies
+                            )
+                            display_hiring_pipeline_results(results)
+                        except AttributeError:
+                            st.error("The analysis pipeline method is not implemented in the backend.")
+                        except Exception as e:
+                            st.error(f"Pipeline failed: {e}")
+                    else:
+                        st.error("Failed to initialize system.")
 
 
 def display_hiring_pipeline_results(results: Dict):
-    """Display hiring difficulties pipeline analysis results"""
-    if 'errors' in results and results['errors']:
-        st.warning("⚠️ Pipeline completed with some errors")
-        with st.expander("View Errors", expanded=False):
+    """Display hiring difficulties pipeline analysis results."""
+    if 'errors' in results and results.get('errors'):
+        st.warning("⚠️ Pipeline completed with some errors.")
+        with st.expander("View Errors"):
             for error in results['errors']:
                 st.error(error)
     else:
         st.success("✅ Pipeline completed successfully!")
-    
-    # Results summary
-    col1, col2, col3, col4 = st.columns(4)
-    
+
+    col1, col2 = st.columns(2)
     with col1:
-        st.metric("Companies Analyzed", results.get('companies_analyzed', 0))
-    
+        st.metric("Filings Analyzed", results.get('filings_analyzed', 0))
     with col2:
-        st.metric("Filings Processed", results.get('filings_analyzed', 0))
-    
-    with col3:
-        st.metric("Hiring Difficulty Findings", results.get('hiring_difficulty_findings', 0))
-    
-    with col4:
-        if 'output_file' in results:
-            st.metric("Results Saved", "✅")
-        else:
-            st.metric("Results Saved", "❌")
-    
-    # Output file information
-    if 'output_file' in results:
-        st.subheader("📄 Output Files")
-        st.write(f"**Results saved to:** {results['output_file']}")
-        
-        if st.button("📥 Download Results"):
-            try:
-                with open(results['output_file'], 'r') as f:
-                    data = f.read()
+        st.metric("Companies Analyzed", results.get('companies_analyzed', 0))
+
+    if results.get('output_file'):
+        st.info(f"Results saved to: `{results['output_file']}`")
+        try:
+            with open(results['output_file'], 'rb') as f:
                 st.download_button(
-                    label="📥 Download CSV Results",
-                    data=data,
-                    file_name=f"hiring_difficulties_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    "📥 Download Results CSV",
+                    data=f,
+                    file_name=os.path.basename(results['output_file']),
                     mime="text/csv"
                 )
-            except Exception as e:
-                st.error(f"Failed to prepare download: {e}")
-    
-    # Next steps
-    st.subheader("🎯 Next Steps")
-    st.info("✅ **Analysis Complete!** You can now:\n"
-            "• View company rankings in the 'Company Rankings' section\n"
-            "• Analyze specific companies in the 'Company Analysis' section\n"
-            "• View statistics in the 'Statistics' section")
+        except Exception as e:
+            st.error(f"Could not read output file for download: {e}")
 
 
 def display_hiring_statistics():
@@ -3488,29 +3072,13 @@ def main():
         ### 💡 Tips for Hiring Difficulties Analysis
         
         **Analysis Types:**
-        - **Company Analysis**: Analyze individual companies for hiring challenges
-        - **Company Rankings**: Rank companies by hiring difficulty indicators
-        - **Pipeline Analysis**: Run complete analysis pipeline
-        - **Statistics**: View analysis summary and statistics
-        
-        **Sample Focus Areas:**
-        - "technical skills shortage"
-        - "labor market challenges"
-        - "recruitment difficulties"
-        - "talent acquisition"
-        - "workforce development"
-        
-        **Company Rankings:**
-        - Uses AI-powered analysis to identify hiring difficulties
-        - Analyzes 10-K filings for hiring challenges and recruitment problems
-        - Ranks companies from highest to lowest hiring difficulties
-        - Provides detailed metrics and exportable reports
+        - **Company Analysis**: Analyze individual companies for hiring challenges for specific years.
+        - **Run Full Pipeline**: Run the analysis for all S&P 500 companies for selected years to generate a summary file.
         
         **Best Practices:**
-        - Run pipeline analysis first to generate data
-        - Use specific focus areas for targeted analysis
-        - Compare results across multiple companies/sectors
-        - Review AI summaries for detailed insights
+        - To analyze a single company quickly, use the "Company Analysis" tab.
+        - To perform a bulk analysis, use the "Run Full Pipeline" tab. This can take a long time.
+        - The results indicate whether hiring difficulties were mentioned and provide an AI-generated summary.
         """, unsafe_allow_html=True)
     else:
         st.sidebar.markdown("""

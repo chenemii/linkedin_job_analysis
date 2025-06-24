@@ -1032,224 +1032,101 @@ Focus on the most relevant information from the highest-scoring chunks."""
             logger.error(f"Error analyzing CSV data: {e}")
             return {'error': str(e)}
 
-    # Hiring Difficulties Analysis Methods
-    
-    def analyze_company_hiring_difficulties(self, 
-                                          company_ticker: str,
-                                          analysis_focus: str = "comprehensive hiring difficulties analysis",
-                                          years: List[int] = [2022, 2023]) -> Dict:
+    def analyze_filings_for_hiring_difficulties(self, company_ticker: str, years: List[int]) -> List[Dict]:
         """
-        Analyze hiring difficulties for a specific company on-demand.
+        Analyzes filings for a single company for hiring difficulties.
+        """
+        logger.info(f"Analyzing hiring difficulties for {company_ticker} for years {years}.")
         
-        Args:
-            company_ticker: Company ticker symbol
-            analysis_focus: Specific aspect to analyze (currently unused but kept for API consistency)
-            years: The years to fetch filings for.
-            
-        Returns:
-            Comprehensive hiring difficulties analysis results
-        """
-        logger.info(f"Starting on-demand hiring difficulties analysis for {company_ticker}")
-
-        # 1. Get company information
         company = self.sp500_collector.get_company_by_symbol(company_ticker)
         if not company:
-            available_companies = self.rag_engine.get_available_companies()
-            return {
-                'error': f"Company {company_ticker} not found in S&P 500",
-                'available_companies': [c['company_ticker'] for c in available_companies]
-            }
+            logger.error(f"Company with ticker {company_ticker} not found.")
+            return [{"error": f"Company {company_ticker} not found."}]
 
-        # 2. Get filings for this specific company
-        logger.info(f"Fetching 10-K filings for {company_ticker} for years {years}...")
-        try:
-            # The download method should ideally use its own cache to avoid re-downloading
-            filings = self.edgar_collector.download_10k_filings(
-                companies=[company], 
-                years=years
-            )
-            if not filings:
-                return {
-                    'error': f"No 10-K filings found for {company_ticker} for the years {years}.",
-                    'suggestion': "Try different years or check if the company is in the S&P 500 list."
-                }
-            logger.info(f"Found {len(filings)} filings for {company_ticker}.")
-        except Exception as e:
-            logger.error(f"Failed to download filings for {company_ticker}: {e}")
-            return {'error': f"Failed to download filings: {e}"}
+        # Download filings for the specific company
+        filings = self.edgar_collector.download_10k_filings(
+            companies=[company],
+            years=years,
+            limit_per_company=len(years) 
+        )
 
-        # 3. Run the hiring difficulties analysis on these filings
-        logger.info(f"Running hiring difficulties analysis on {len(filings)} filings for {company_ticker}...")
+        if not filings:
+            return [{"error": f"No filings found for {company_ticker} for the specified years."}]
+            
+        # Analyze the filings
         analysis_results = self.hiring_difficulties_analyzer.analyze_edgar_filings(
-            filings=filings,
+            filings=filings, 
             companies=[company]
         )
-
-        if not analysis_results:
-            return {
-                'error': f"Hiring difficulties analysis produced no results for {company_ticker}.",
-                'suggestion': "The filings might not contain relevant text for analysis."
-            }
         
-        # 4. Get summary for the company
-        summary_data = self.hiring_difficulties_analyzer.get_company_hiring_difficulty_summary(company.cik)
-        if 'error' in summary_data:
-             return {
-                'error': f"Could not generate summary for {company_ticker}: {summary_data['error']}",
-            }
-
-        # 5. Add company context and return
-        summary_data['company_info'] = {
-            'name': company.name,
-            'ticker': company.symbol,
-            'cik': company.cik,
-            'sector': company.sector,
-            'headquarters': company.headquarters
-        }
-        
-        return summary_data
-
-    def rank_companies_by_hiring_difficulties(self, 
-                                            min_filings: int = 1,
-                                            recent_years_only: bool = False,
-                                            years_lookback: int = 3) -> List[Dict]:
-        """
-        Rank all companies by hiring difficulties using similarity-based scoring
-        
-        Args:
-            min_filings: Minimum number of filings required for a company to be included
-            recent_years_only: If True, only consider filings from recent years
-            years_lookback: Number of recent years to consider if recent_years_only is True
-            
-        Returns:
-            List of dictionaries with company rankings, sorted from highest to lowest hiring difficulties
-        """
-        logger.info("Ranking companies by hiring difficulties")
-
-        # Load hiring difficulties data if not already loaded
-        if not hasattr(self.hiring_difficulties_analyzer, 'results') or not self.hiring_difficulties_analyzer.results:
-            if not self.hiring_difficulties_analyzer.load_cache():
-                return []
-
-        # Use the analyzer's ranking method
-        rankings = self.hiring_difficulties_analyzer.rank_companies_by_hiring_difficulty(
-            min_filings=min_filings,
-            recent_years_only=recent_years_only,
-            years_lookback=years_lookback
-        )
-
-        return rankings
+        # Convert dataclass objects to dicts for UI
+        return [r.__dict__ for r in analysis_results]
 
     def run_hiring_difficulties_analysis_pipeline(self,
                                                 years: List[int] = [2022, 2023],
-                                                limit_companies: Optional[int] = None,
-                                                save_results: bool = True) -> Dict:
+                                                limit_companies: Optional[int] = None) -> Dict:
         """
         Run the complete hiring difficulties analysis pipeline
         
         Args:
-            years: Years of filings to analyze
-            limit_companies: Optional limit on number of companies
-            save_results: Whether to save results to files
+            years: Years to analyze
+            limit_companies: Optional limit on number of companies to analyze
             
         Returns:
             Pipeline execution results
         """
-        logger.info("Starting hiring difficulties analysis pipeline")
-
         results = {
+            'status': 'started',
             'companies_analyzed': 0,
-            'filings_analyzed': 0,
-            'hiring_difficulty_findings': 0,
+            'filings_processed': 0,
+            'total_companies': 0,
+            'output_file': None,
             'errors': []
         }
 
         try:
-            # Step 1: Get companies and filings (reuse existing data if available)
-            companies = self.sp500_collector.collect_all()
-            companies_with_cik = self.sp500_collector.get_companies_with_cik()
-
+            # 1. Get S&P 500 companies
+            logger.info("Loading S&P 500 companies...")
+            companies = self.sp500_collector.get_companies_with_cik()
             if limit_companies:
-                companies_with_cik = companies_with_cik[:limit_companies]
+                companies = companies[:limit_companies]
+            
+            results['total_companies'] = len(companies)
+            logger.info(f"Analyzing {len(companies)} companies for hiring difficulties...")
 
-            # Load existing filings if available
-            if not self.edgar_collector.load_cache():
-                logger.info("No cached filings found, downloading new filings")
-                filings = self.edgar_collector.download_10k_filings(
-                    companies_with_cik, years, limit_filings_per_company=2)
-            else:
-                logger.info("Using cached filings")
-                filings = self.edgar_collector.filings
-
-            results['companies_analyzed'] = len(companies_with_cik)
-            results['filings_analyzed'] = len(filings)
-
-            # Step 2: Run hiring difficulties analysis
-            logger.info("Running hiring difficulties analysis on filings")
-            hiring_difficulty_results = self.hiring_difficulties_analyzer.analyze_edgar_filings(
-                filings=filings,
-                companies=companies_with_cik
+            # 2. Download filings
+            logger.info(f"Downloading filings for {len(companies)} companies...")
+            filings = self.edgar_collector.download_10k_filings(
+                companies,
+                years,
+                # Get one filing per year per company
+                limit_per_company=len(years)
             )
+            
+            if not filings:
+                results['errors'].append("No filings were downloaded. Stopping pipeline.")
+                return results
 
-            # Count significant findings
-            significant_findings = self.hiring_difficulties_analyzer.filter_significant_findings()
-            results['hiring_difficulty_findings'] = len(significant_findings)
-
-            # Step 3: Save results if requested
-            if save_results:
-                output_path = self.hiring_difficulties_analyzer.save_results()
-                self.hiring_difficulties_analyzer.save_cache()
-                results['output_file'] = output_path
-
-            logger.info("Hiring difficulties analysis pipeline completed successfully")
+            # 3. Analyze filings for hiring difficulties
+            logger.info(f"Analyzing {len(filings)} filings for hiring difficulties...")
+            self.hiring_difficulties_analyzer.analyze_edgar_filings(filings=filings, companies=companies)
+            
+            # 4. Save results to CSV
+            output_file = self.hiring_difficulties_analyzer.save_results()
+            
+            results.update({
+                'status': 'completed',
+                'companies_analyzed': len(set(f.cik for f in filings)),
+                'filings_processed': len(filings),
+                'output_file': output_file
+            })
+            
+            logger.info(f"Hiring difficulties analysis pipeline completed. Results saved to {output_file}")
 
         except Exception as e:
-            error_msg = f"Error in hiring difficulties analysis pipeline: {e}"
-            logger.error(error_msg)
+            error_msg = f"Pipeline failed: {str(e)}"
+            results['status'] = 'failed'
             results['errors'].append(error_msg)
+            logger.error(error_msg, exc_info=True)
 
         return results
-
-    def get_hiring_difficulties_summary_stats(self) -> Dict:
-        """
-        Get hiring difficulties analysis summary statistics
-        
-        Returns:
-            Summary statistics dictionary
-        """
-        try:
-            if not hasattr(self.hiring_difficulties_analyzer, 'results') or not self.hiring_difficulties_analyzer.results:
-                self.hiring_difficulties_analyzer.load_cache()
-
-            return self.hiring_difficulties_analyzer.get_summary_stats()
-            
-        except Exception as e:
-            logger.error(f"Error getting hiring difficulties summary stats: {e}")
-            return {'error': str(e)}
-
-    def export_hiring_difficulties_rankings(self, 
-                                          rankings: List[Dict] = None,
-                                          output_path: str = None,
-                                          include_summaries: bool = True) -> str:
-        """
-        Export hiring difficulties company rankings to CSV file
-        
-        Args:
-            rankings: List of company rankings (if None, will generate using default method)
-            output_path: Optional custom output path
-            include_summaries: Whether to include AI-generated summaries in export
-            
-        Returns:
-            Path to exported file
-        """
-        logger.info("Exporting hiring difficulties company rankings")
-
-        try:
-            return self.hiring_difficulties_analyzer.export_company_rankings(
-                rankings=rankings,
-                output_path=output_path,
-                include_summaries=include_summaries
-            )
-        except Exception as e:
-            logger.error(f"Error exporting hiring difficulties rankings: {e}")
-            raise e
